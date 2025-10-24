@@ -1,6 +1,6 @@
 # Logito Makefile
 
-.PHONY: up down restart logs health mock reset clean test test-unit test-integration
+.PHONY: up down restart logs health mock reset clean test test-integration setup
 
 # Start all services
 up:
@@ -48,30 +48,13 @@ test-integration:
 	@echo "Running integration tests..."
 	cd tests && go test -v
 
-# Build all services
-build:
-	docker-compose build
-
-# Start services in development mode
-dev:
-	docker-compose -f docker-compose.yml -f docker-compose.dev.yml up
-
-# Format code
-fmt:
-	go fmt ./...
-
-# Lint code
-lint:
-	golangci-lint run
-
-# Install dependencies
-deps:
-	go mod download
-	cd tests && go mod download
 
 # Setup development environment
-setup: deps
+setup:
 	@echo "Setting up development environment..."
+	@echo "Installing dependencies..."
+	go mod download
+	cd tests && go mod download
 	@echo "Starting services..."
 	$(MAKE) up
 	@echo "Waiting for services to be ready..."
@@ -84,19 +67,6 @@ setup: deps
 	@echo "  Log Ingestor: http://localhost:3000"
 	@echo "  Elasticsearch: http://localhost:9200"
 
-# Quick test of the system
-quick-test:
-	@echo "Running quick system test..."
-	@echo "1. Testing log ingestion..."
-	curl -X POST http://localhost:3000/logs \
-		-H "Content-Type: application/json" \
-		-d '{"level":"info","message":"Quick test log","resourceId":"test-server","timestamp":"'$(shell date -u +%Y-%m-%dT%H:%M:%SZ)'"}' \
-		| jq .
-	@echo "2. Waiting for indexing..."
-	sleep 5
-	@echo "3. Testing search..."
-	curl -s "http://localhost:4000/search?limit=5" | jq .
-	@echo "Quick test completed!"
 
 # Help
 help:
@@ -109,15 +79,6 @@ help:
 	@echo "  mock            - Run load tests"
 	@echo "  reset           - Reset database and run migrations"
 	@echo "  clean           - Clean up containers and volumes"
-	@echo "  test            - Run all tests"
-	@echo "  test-unit       - Run unit tests"
 	@echo "  test-integration- Run integration tests"
-	@echo "  build           - Build all services"
-	@echo "  dev             - Start services in development mode"
-	@echo "  test-coverage   - Run tests with coverage"
-	@echo "  fmt             - Format code"
-	@echo "  lint            - Lint code"
-	@echo "  deps            - Install dependencies"
 	@echo "  setup           - Setup development environment"
-	@echo "  quick-test      - Run quick system test"
 	@echo "  help            - Show this help"

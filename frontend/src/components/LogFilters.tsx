@@ -93,7 +93,7 @@ export const LogFilters: React.FC<LogFiltersProps> = ({
             <div className="space-y-2">
               <label className="text-sm font-medium">Regex Search</label>
               <Input
-                placeholder="Enter regex pattern"
+                placeholder="Enter regex pattern for example: .*database.*"
                 value={localFilters.regex || ''}
                 onChange={(e) => handleFilterChange('regex', e.target.value)}
                 onKeyPress={(e) => e.key === 'Enter' && handleSearch()}
