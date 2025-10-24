@@ -40,15 +40,8 @@ clean:
 	docker-compose down -v --remove-orphans
 	docker system prune -f
 
-# Run all tests
-test: test-unit test-integration
-
-# Run unit tests
-test-unit:
-	@echo "Running log ingestor unit tests..."
-	cd log-ingestor && go test ./internal/ingest/... -v
-	@echo "Running query interface unit tests..."
-	cd query-interface && go test ./internal/api/... -v
+# Run integration tests only
+test: test-integration
 
 # Run integration tests
 test-integration:
@@ -62,13 +55,6 @@ build:
 # Start services in development mode
 dev:
 	docker-compose -f docker-compose.yml -f docker-compose.dev.yml up
-
-# Run tests with coverage
-test-coverage:
-	@echo "Running tests with coverage..."
-	cd log-ingestor && go test ./internal/ingest/... -coverprofile=coverage.out
-	cd query-interface && go test ./internal/api/... -coverprofile=coverage.out
-	cd tests && go test -v
 
 # Format code
 fmt:

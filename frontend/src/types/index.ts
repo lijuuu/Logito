@@ -56,6 +56,7 @@ export interface CountsResponse {
 
 export interface SearchFilters {
   message?: string;
+  regex?: string;
   level?: string;
   resourceId?: string;
   traceId?: string;

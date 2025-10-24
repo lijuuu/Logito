@@ -268,6 +268,160 @@ func TestEndToEndFlow_LogIngestionAndSearch(t *testing.T) {
 		assert.True(t, found, "Should find log with 'database' in message")
 	})
 
+	// Step 8.1: Test regex search functionality
+	t.Run("TestRegexSearch", func(t *testing.T) {
+		// Test simple regex pattern
+		resp, err := http.Get(QueryAPIURL + "/search?regex=.*failed.*&limit=10&page=1")
+		require.NoError(t, err)
+		defer resp.Body.Close()
+
+		assert.Equal(t, http.StatusOK, resp.StatusCode)
+
+		var searchResp TestSearchResponse
+		err = json.NewDecoder(resp.Body).Decode(&searchResp)
+		require.NoError(t, err)
+
+		// Should find logs matching ".*failed.*" pattern
+		assert.GreaterOrEqual(t, searchResp.Total, 1)
+
+		// Verify that returned logs match the pattern
+		for _, log := range searchResp.Results {
+			if source, ok := log["_source"].(map[string]interface{}); ok {
+				if message, ok := source["message"].(string); ok {
+					// Check that message contains "failed"
+					assert.True(t, contains(strings.ToLower(message), "failed"), "Message should contain 'failed'")
+				}
+			}
+		}
+	})
+
+	// Step 8.2: Test invalid regex pattern
+	t.Run("TestInvalidRegex", func(t *testing.T) {
+		resp, err := http.Get(QueryAPIURL + "/search?regex=%5Binvalid&limit=10&page=1")
+		require.NoError(t, err)
+		defer resp.Body.Close()
+
+		// Should return 400 Bad Request for invalid regex
+		assert.Equal(t, http.StatusBadRequest, resp.StatusCode)
+
+		var errorResp map[string]interface{}
+		err = json.NewDecoder(resp.Body).Decode(&errorResp)
+		require.NoError(t, err)
+
+		assert.Contains(t, errorResp, "error")
+		assert.Contains(t, errorResp["error"], "Invalid regex pattern")
+	})
+
+	// Step 8.3: Test regex combined with other filters
+	t.Run("TestRegexWithFilters", func(t *testing.T) {
+		resp, err := http.Get(QueryAPIURL + "/search?regex=.*failed.*&level=error&limit=10&page=1")
+		require.NoError(t, err)
+		defer resp.Body.Close()
+
+		assert.Equal(t, http.StatusOK, resp.StatusCode)
+
+		var searchResp TestSearchResponse
+		err = json.NewDecoder(resp.Body).Decode(&searchResp)
+		require.NoError(t, err)
+
+		// Should find error logs that contain "failed"
+		assert.GreaterOrEqual(t, searchResp.Total, 1)
+
+		// Verify all results are error level and contain "failed"
+		for _, log := range searchResp.Results {
+			if source, ok := log["_source"].(map[string]interface{}); ok {
+				level := source["level"].(string)
+				assert.Equal(t, "error", strings.ToLower(level))
+
+				if message, ok := source["message"].(string); ok {
+					assert.True(t, contains(strings.ToLower(message), "failed"), "Message should contain 'failed'")
+				}
+			}
+		}
+	})
+
+	// Step 8.4: Test adjacent proximity search
+	t.Run("TestAdjacentProximitySearch", func(t *testing.T) {
+		// Test two-term adjacent search
+		resp, err := http.Get(QueryAPIURL + "/search?message=mercy%2Blog&limit=10&page=1")
+		require.NoError(t, err)
+		defer resp.Body.Close()
+
+		assert.Equal(t, http.StatusOK, resp.StatusCode)
+
+		var searchResp TestSearchResponse
+		err = json.NewDecoder(resp.Body).Decode(&searchResp)
+		require.NoError(t, err)
+
+		// Should find logs where "mercy" and "log" are adjacent
+		assert.GreaterOrEqual(t, searchResp.Total, 1)
+
+		// Verify that returned logs have both terms adjacent
+		for _, log := range searchResp.Results {
+			if source, ok := log["_source"].(map[string]interface{}); ok {
+				if message, ok := source["message"].(string); ok {
+					// Check that both terms exist in the message
+					lowerMessage := strings.ToLower(message)
+					assert.True(t, contains(lowerMessage, "mercy"), "Message should contain 'mercy'")
+					assert.True(t, contains(lowerMessage, "log"), "Message should contain 'log'")
+
+					// Verify they are adjacent by checking for "mercy log" pattern
+					assert.True(t, contains(lowerMessage, "mercy log"), "Terms should be adjacent")
+				}
+			}
+		}
+	})
+
+	// Step 8.5: Test multi-term adjacent search
+	t.Run("TestMultiTermAdjacentSearch", func(t *testing.T) {
+		// Test three-term adjacent search
+		resp, err := http.Get(QueryAPIURL + "/search?message=rain%2Bmercy%2Blog&limit=10&page=1")
+		require.NoError(t, err)
+		defer resp.Body.Close()
+
+		assert.Equal(t, http.StatusOK, resp.StatusCode)
+
+		var searchResp TestSearchResponse
+		err = json.NewDecoder(resp.Body).Decode(&searchResp)
+		require.NoError(t, err)
+
+		// Should find logs where "rain", "mercy", and "log" are all adjacent
+		assert.GreaterOrEqual(t, searchResp.Total, 1)
+
+		// Verify that returned logs have all three terms adjacent
+		for _, log := range searchResp.Results {
+			if source, ok := log["_source"].(map[string]interface{}); ok {
+				if message, ok := source["message"].(string); ok {
+					// Check that all terms exist in the message
+					lowerMessage := strings.ToLower(message)
+					assert.True(t, contains(lowerMessage, "rain"), "Message should contain 'rain'")
+					assert.True(t, contains(lowerMessage, "mercy"), "Message should contain 'mercy'")
+					assert.True(t, contains(lowerMessage, "log"), "Message should contain 'log'")
+
+					// Verify they are all adjacent by checking for "rain mercy log" pattern
+					assert.True(t, contains(lowerMessage, "rain mercy log"), "All terms should be adjacent")
+				}
+			}
+		}
+	})
+
+	// Step 8.6: Test non-adjacent terms don't match
+	t.Run("TestNonAdjacentTerms", func(t *testing.T) {
+		// Test terms that exist but are not adjacent
+		resp, err := http.Get(QueryAPIURL + "/search?message=mercy%2Btest&limit=10&page=1")
+		require.NoError(t, err)
+		defer resp.Body.Close()
+
+		assert.Equal(t, http.StatusOK, resp.StatusCode)
+
+		var searchResp TestSearchResponse
+		err = json.NewDecoder(resp.Body).Decode(&searchResp)
+		require.NoError(t, err)
+
+		// Should find no results since "mercy" and "test" are not adjacent
+		assert.Equal(t, 0, searchResp.Total)
+	})
+
 	// Step 9: Test pagination
 	t.Run("TestPagination", func(t *testing.T) {
 		// Get first page

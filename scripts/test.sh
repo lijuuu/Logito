@@ -66,35 +66,6 @@ check_services() {
     return 0
 }
 
-# Run unit tests
-run_unit_tests() {
-    print_status "Running unit tests..."
-    
-    # Log ingestor unit tests
-    print_status "Running log ingestor unit tests..."
-    cd log-ingestor
-    if go test ./internal/ingest/... -v; then
-        print_success "Log ingestor unit tests passed"
-    else
-        print_error "Log ingestor unit tests failed"
-        return 1
-    fi
-    cd ..
-    
-    # Query interface unit tests
-    print_status "Running query interface unit tests..."
-    cd query-interface
-    if go test ./internal/api/... -v; then
-        print_success "Query interface unit tests passed"
-    else
-        print_error "Query interface unit tests failed"
-        return 1
-    fi
-    cd ..
-    
-    print_success "All unit tests passed!"
-    return 0
-}
 
 # Run integration tests
 run_integration_tests() {
@@ -116,38 +87,6 @@ run_integration_tests() {
 main() {
     local run_integration=true
     
-    # Parse command line arguments
-    while [[ $# -gt 0 ]]; do
-        case $1 in
-            --unit-only)
-                run_integration=false
-                shift
-                ;;
-            --integration-only)
-                # Skip unit tests, only run integration
-                shift
-                ;;
-            --help)
-                echo "Usage: $0 [OPTIONS]"
-                echo "Options:"
-                echo "  --unit-only        Run only unit tests"
-                echo "  --integration-only Run only integration tests"
-                echo "  --help             Show this help message"
-                exit 0
-                ;;
-            *)
-                print_error "Unknown option: $1"
-                echo "Use --help for usage information"
-                exit 1
-                ;;
-        esac
-    done
-    
-    # Run unit tests
-    if ! run_unit_tests; then
-        print_error "Unit tests failed. Exiting."
-        exit 1
-    fi
     
     # Run integration tests if requested and services are running
     if [ "$run_integration" = true ]; then

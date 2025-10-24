@@ -26,6 +26,7 @@ open http://localhost:3030
 
 ## Documentation
 
+- **[API Documentation](docs/api.md)** - Complete API reference with examples
 - **[Installation Guide](docs/installation.md)** - Setup and deployment instructions
 - **[Configuration Guide](docs/configuration.md)** - System configuration and tuning
 - **[Services Overview](docs/services.md)** - Architecture and service details

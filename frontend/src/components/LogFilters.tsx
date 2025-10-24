@@ -88,6 +88,19 @@ export const LogFilters: React.FC<LogFiltersProps> = ({
             </div>
           </div>
 
+          {/* Regex Search */}
+          <div className="lg:col-span-2">
+            <div className="space-y-2">
+              <label className="text-sm font-medium">Regex Search</label>
+              <Input
+                placeholder="Enter regex pattern"
+                value={localFilters.regex || ''}
+                onChange={(e) => handleFilterChange('regex', e.target.value)}
+                onKeyPress={(e) => e.key === 'Enter' && handleSearch()}
+              />
+            </div>
+          </div>
+
           {/* Level Filter */}
           <div className="space-y-2">
             <label className="text-sm font-medium">Log Level</label>

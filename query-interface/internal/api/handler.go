@@ -6,7 +6,9 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"regexp"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/lijuuu/Logito/query-interface/internal/indexer"
@@ -48,6 +50,7 @@ func (h *Handler) Search(c *gin.Context) {
 
 	// parse query parameters
 	message := c.Query("message")
+	regex := c.Query("regex")
 	level := c.Query("level")
 	resourceId := c.Query("resourceId")
 	traceId := c.Query("traceId")
@@ -55,8 +58,8 @@ func (h *Handler) Search(c *gin.Context) {
 	commit := c.Query("commit")
 	parentResourceId := c.Query("parentResourceId")
 
-	log.Printf("Search request - Message: '%s', Level: '%s', ResourceID: '%s', TraceID: '%s', SpanID: '%s', Commit: '%s', ParentResourceID: '%s'",
-		message, level, resourceId, traceId, spanId, commit, parentResourceId)
+	log.Printf("Search request - Message: '%s', Regex: '%s', Level: '%s', ResourceID: '%s', TraceID: '%s', SpanID: '%s', Commit: '%s', ParentResourceID: '%s'",
+		message, regex, level, resourceId, traceId, spanId, commit, parentResourceId)
 
 	// parse pagination
 	page := 1
@@ -97,8 +100,18 @@ func (h *Handler) Search(c *gin.Context) {
 	log.Printf("Search pagination - Page: %d, Limit: %d, StartTime: %s, EndTime: %s",
 		page, limit, startTimeParam, endTimeParam)
 
+	// validate regex if provided
+	if regex != "" {
+		if err := h.validateRegex(regex); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{
+				"error": fmt.Sprintf("Invalid regex pattern: %v", err),
+			})
+			return
+		}
+	}
+
 	// build elasticsearch query
-	esQuery := h.buildSearchQuery(message, level, resourceId, traceId, spanId, commit, parentResourceId, startTimeParam, endTimeParam, page, limit)
+	esQuery := h.buildSearchQuery(message, regex, level, resourceId, traceId, spanId, commit, parentResourceId, startTimeParam, endTimeParam, page, limit)
 
 	// debug: log the elasticsearch query
 	queryJSON, _ := json.MarshalIndent(esQuery, "", "  ")
@@ -141,7 +154,7 @@ func (h *Handler) Search(c *gin.Context) {
 }
 
 // buildSearchQuery builds the elasticsearch query from parameters
-func (h *Handler) buildSearchQuery(message, level, resourceId, traceId, spanId, commit, parentResourceId, startTime, endTime string, page, limit int) map[string]interface{} {
+func (h *Handler) buildSearchQuery(message, regex, level, resourceId, traceId, spanId, commit, parentResourceId, startTime, endTime string, page, limit int) map[string]interface{} {
 	// base query structure
 	esQuery := map[string]interface{}{
 		"from":             (page - 1) * limit,
@@ -159,11 +172,18 @@ func (h *Handler) buildSearchQuery(message, level, resourceId, traceId, spanId, 
 
 	// add message search to must clause
 	if message != "" {
-		boolQuery["must"] = append(boolQuery["must"].([]map[string]interface{}), map[string]interface{}{
-			"match": map[string]interface{}{
-				"message": message,
-			},
-		})
+		messageQuery := h.buildMessageQuery(message)
+		if messageQuery != nil {
+			boolQuery["must"] = append(boolQuery["must"].([]map[string]interface{}), messageQuery)
+		}
+	}
+
+	// add regex search to must clause
+	if regex != "" {
+		regexQuery := h.buildRegexQuery(regex)
+		if regexQuery != nil {
+			boolQuery["must"] = append(boolQuery["must"].([]map[string]interface{}), regexQuery)
+		}
 	}
 
 	// add field filters
@@ -818,4 +838,91 @@ func (h *Handler) GetSyncStatus(c *gin.Context) {
 	counts["workerHealthy"] = workerHealthy
 
 	c.JSON(http.StatusOK, counts)
+}
+
+// buildMessageQuery builds a message query with support for proximity search
+func (h *Handler) buildMessageQuery(message string) map[string]interface{} {
+	if message == "" {
+		return nil
+	}
+
+	// Check if the message contains proximity operators (+)
+	if strings.Contains(message, "+") {
+		// Split by + to get individual terms
+		terms := strings.Split(message, "+")
+		// Trim whitespace from each term
+		for i, term := range terms {
+			terms[i] = strings.TrimSpace(term)
+		}
+
+		// Filter out empty terms
+		validTerms := []string{}
+		for _, term := range terms {
+			if term != "" {
+				validTerms = append(validTerms, term)
+			}
+		}
+
+		if len(validTerms) == 0 {
+			return nil
+		}
+
+		if len(validTerms) == 1 {
+			// Single term, use regular match
+			return map[string]interface{}{
+				"match": map[string]interface{}{
+					"message": validTerms[0],
+				},
+			}
+		}
+
+		// Multiple terms, use span_near for proximity search
+		// This ensures terms are close to each other (within 5 words by default)
+		spanQueries := []map[string]interface{}{}
+		for _, term := range validTerms {
+			spanQueries = append(spanQueries, map[string]interface{}{
+				"span_term": map[string]interface{}{
+					"message": term,
+				},
+			})
+		}
+
+		return map[string]interface{}{
+			"span_near": map[string]interface{}{
+				"clauses":  spanQueries,
+				"slop":     0,    // Terms must be adjacent (next to each other)
+				"in_order": true, // Terms must be in the specified order
+			},
+		}
+	}
+
+	// Regular message search without proximity operators
+	return map[string]interface{}{
+		"match": map[string]interface{}{
+			"message": message,
+		},
+	}
+}
+
+// validateRegex validates a regex pattern
+func (h *Handler) validateRegex(pattern string) error {
+	_, err := regexp.Compile(pattern)
+	return err
+}
+
+// buildRegexQuery builds a regex query for elasticsearch
+func (h *Handler) buildRegexQuery(pattern string) map[string]interface{} {
+	if pattern == "" {
+		return nil
+	}
+
+	// Use regexp query for pattern matching on the message field
+	return map[string]interface{}{
+		"regexp": map[string]interface{}{
+			"message": map[string]interface{}{
+				"value": pattern,
+				"flags": "ALL",
+			},
+		},
+	}
 }
