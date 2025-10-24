@@ -76,7 +76,7 @@ export const IndexingStatus: React.FC = () => {
             <Database className="h-5 w-5" />
             Indexing Status
           </div>
-          <Button
+          {/* <Button
             variant="outline"
             size="sm"
             onClick={handleForceRefresh}
@@ -88,7 +88,7 @@ export const IndexingStatus: React.FC = () => {
               <RefreshCw className="h-4 w-4 mr-2" />
             )}
             Force Refresh
-          </Button>
+          </Button> */}
         </CardTitle>
       </CardHeader>
       <CardContent>
