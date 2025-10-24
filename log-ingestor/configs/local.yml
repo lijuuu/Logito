@@ -1,0 +1,29 @@
+server:
+  host: "0.0.0.0"
+  port: 3000
+
+postgres:
+  host: "postgres"
+  port: 5432
+  user: "loguser"
+  password: "logpass"
+  dbname: "logs"
+  maxOpenConns: 100 # optimized for 2GB memory limit
+  maxIdleConns: 30 # balanced for connection reuse
+  connMaxLifetime: "10m" # longer lifetime to reduce connection churn
+
+elasticsearch:
+  host: "http://elasticsearch:9200"
+  index: "logs"
+  batchSize: 500 # max logs per es bulk insert
+  retryCount: 3
+  timeout: "10s"
+
+batcher:
+  maxBatchSize: 2000 # increased for better throughput
+  maxBatchCount: 500 # reduced queue size to prevent memory buildup
+  flushInterval: 50ms # faster flushing for lower latency
+
+worker:
+  concurrency: 20 # increased workers for better parallelization
+  retryInterval: 50ms # faster retries for better throughput

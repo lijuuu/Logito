@@ -1,0 +1,39 @@
+server:
+  host: "0.0.0.0"
+  port: 4000
+
+postgres:
+  host: "postgres"
+  port: 5432
+  user: "loguser"
+  password: "logpass"
+  dbname: "logs"
+  maxOpenConns: 25 # increased for better query performance
+  maxIdleConns: 10 # increased for connection reuse
+  connMaxLifetime: "15m" # balanced lifetime
+
+elasticsearch:
+  host: "http://elasticsearch:9200"
+  index: "logs"
+  batchSize: 500 # bulk insert for indexing
+  retryCount: 3
+  timeout: "10s"
+
+indexer:
+  workerCount: 12 # increased workers for better parallelization
+  fetchInterval: 500ms # faster fetching for better responsiveness
+  batchSize: 2000 # increased batch size for better throughput
+  maxRetries: 3
+  processingTimeout: 20s # reduced timeout for faster failure detection
+
+filters:
+  # fields allowed for query filtering
+  allowedFields:
+    - level
+    - message
+    - resourceId
+    - timestamp
+    - traceId
+    - spanId
+    - commit
+    - metadata.parentResourceId

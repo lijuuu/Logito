@@ -1,0 +1,120 @@
+
+services:
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: loguser
+      POSTGRES_PASSWORD: logpass
+      POSTGRES_DB: logs
+    ports:
+      - "5433:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./.configs/postgresql.conf:/etc/postgresql/postgresql.conf
+    command: ["postgres", "-c", "config_file=/etc/postgresql/postgresql.conf"]
+    deploy:
+      resources:
+        limits:
+          cpus: "2.0"
+          memory: "2G"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U loguser -d logs -h localhost"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
+
+
+  elasticsearch:
+    image: docker.elastic.co/elasticsearch/elasticsearch:8.11.1
+    environment:
+      discovery.type: single-node
+      ES_JAVA_OPTS: "-Xms512m -Xmx512m"
+      xpack.security.enabled: false
+    ports:
+      - "9200:9200"
+    volumes:
+      - elasticsearch_data:/usr/share/elasticsearch/data
+    deploy:
+      resources:
+        limits:
+          cpus: "2.0"
+          memory: "2G"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:9200/_cluster/health || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+
+  log-ingestor:
+    build:
+      context: ./log-ingestor
+      dockerfile: docker/Dockerfile
+    ports:
+      - "3000:3000"
+      - "6060:6060"  #profiling port
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+    environment:
+      - ENV=local
+      - GOMAXPROCS=1
+      - GOGC=50
+      - GOMEMLIMIT=512MiB
+    healthcheck:
+      test: ["CMD-SHELL", "wget --no-verbose --tries=1 --spider http://localhost:3000/health || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: "512M"
+
+  query-interface:
+    build:
+      context: ./query-interface
+      dockerfile: docker/Dockerfile
+    ports:
+      - "4000:4000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      elasticsearch:
+        condition: service_healthy
+    environment:
+      - ENV=local
+      - GOMAXPROCS=1
+      - GOMEMLIMIT=512MiB
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: "512M"
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: docker/Dockerfile
+    ports:
+      - "3030:3030"
+    volumes:
+      - frontend_node_modules:/app/node_modules
+    depends_on:
+      - query-interface
+    environment:
+      - REACT_APP_API_URL=http://localhost:4000
+    deploy:
+      resources:
+        limits:
+          cpus: "0.5"
+          memory: "512M"
+
+volumes:
+  postgres_data:
+  elasticsearch_data:
+  frontend_node_modules:
