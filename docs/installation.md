@@ -46,7 +46,7 @@ make logs
 | `make logs` | View all service logs |
 | `make health` | Check service health |
 | `make clean` | Remove all containers and volumes |
-| `make mock` | Run load tests |
+| `make load` | Run load tests |
 | `make reset` | Reset database and run migrations |
 
 ## Service Endpoints
@@ -89,6 +89,6 @@ ports:
 ## Next Steps
 
 1. **Configure Services**: See [Configuration Guide](configuration.md)
-2. **Run Load Tests**: `make mock`
+2. **Run Load Tests**: `make load`
 3. **Access Web Interface**: http://localhost:3030
 4. **Ingest Logs**: Send POST requests to http://localhost:3000/logs
