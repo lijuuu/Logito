@@ -7,8 +7,8 @@ export const useSyncStatus = () => {
   return useQuery({
     queryKey: ['syncStatus'],
     queryFn: () => apiService.getSyncStatus(),
-    staleTime: 1000, // Data is considered stale after 1 second
-    refetchInterval: 1000, // Refetch every 1 second
+    staleTime: 5000, // Data is considered stale after 1 second
+    refetchInterval: 5000, // Refetch every 1 second
     refetchIntervalInBackground: true, // Continue refetching even when tab is not active
     retry: 3,
     retryDelay: (attemptIndex) => Math.min(1000 * 2 ** attemptIndex, 30000),

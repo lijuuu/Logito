@@ -38,7 +38,7 @@ export const StatsCards: React.FC<StatsCardsProps> = ({ filters }) => {
 
   const stats = [
     {
-      title: 'Total Logs',
+      title: 'Total Logs (Est.)',
       value: totalCount.toLocaleString(),
       icon: Activity,
       color: 'text-blue-600',

@@ -12,6 +12,22 @@ A log management system built with Go and React, featuring high-performance log 
 - **PostgreSQL**: Primary database for log storage
 - **Elasticsearch**: Search and indexing engine
 
+## Performance
+
+Logito delivers solid performance for log management with proven scalability:
+
+### Key Performance Metrics
+- **Peak Throughput**: 11,787 logs/sec under optimal conditions
+- **Sustained Performance**: 7,932 logs/sec with 100 concurrent users
+- **Zero Error Rate**: 100% success rate across all load scenarios
+- **Response Times**: P95 under 50ms for normal to high traffic
+- **Scalability**: Tested with close to 11M logs
+
+### Load Test Results
+![Performance Metrics](docs/performance.png)
+
+Comprehensive load testing demonstrates solid performance across various scenarios with 100% success rate and excellent response times.
+
 ## Quick Start
 
 ```bash
@@ -56,7 +72,7 @@ The system is configured with these default specifications:
 | `make restart` | Restart all services |
 | `make logs` | View all service logs |
 | `make health` | Check service health |
-| `make mock` | Run load tests |
+| `make load` | Run load tests |
 | `make reset` | Reset database and run migrations |
 
 ## Service Endpoints
@@ -96,7 +112,7 @@ curl "http://localhost:4000/logs?level=error&limit=10"
 
 ### Run Load Tests
 ```bash
-make mock
+make load
 ```
 
 ## Development
@@ -106,9 +122,9 @@ make mock
 docker compose build
 ```
 
-### Adding Mock Data
+### Running Load Tests
 ```bash
-make mock
+make load
 ```
 
 ## Cleanup

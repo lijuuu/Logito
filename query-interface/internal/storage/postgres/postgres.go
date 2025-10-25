@@ -67,7 +67,7 @@ func (c *Client) GetUnindexedLogs(ctx context.Context, limit int) ([]*logentry.L
 		LIMIT $1
 		FOR UPDATE SKIP LOCKED
 	`
-	
+
 	rows, err := c.pool.Query(ctx, query, limit)
 	if err != nil {
 		return nil, fmt.Errorf("failed to fetch unindexed logs: %w", err)
@@ -168,14 +168,14 @@ func (c *Client) MarkAsFailed(ctx context.Context, ids []int64, reason string) e
 	return nil
 }
 
-// GetTotalCount returns the total number of logs in postgres
+// GetTotalCount returns the estimated total number of logs in postgres using reltuples
 func (c *Client) GetTotalCount(ctx context.Context) (int64, error) {
 	var count int64
-	query := `SELECT COUNT(*) FROM logs`
+	query := `SELECT reltuples::bigint AS estimate FROM pg_class WHERE relname = 'logs'`
 
 	err := c.pool.QueryRow(ctx, query).Scan(&count)
 	if err != nil {
-		return 0, fmt.Errorf("failed to get total count: %w", err)
+		return 0, fmt.Errorf("failed to get total count estimate: %w", err)
 	}
 
 	return count, nil

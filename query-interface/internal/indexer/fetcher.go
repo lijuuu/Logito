@@ -47,7 +47,7 @@ func (f *Fetcher) ResetAllToUnindexed(ctx context.Context) error {
 	return f.dbClient.ResetAllToUnindexed(ctx)
 }
 
-// GetTotalCount returns the total number of logs in postgres
+// GetTotalCount returns the estimated total number of logs in postgres
 func (f *Fetcher) GetTotalCount(ctx context.Context) (int64, error) {
 	return f.dbClient.GetTotalCount(ctx)
 }

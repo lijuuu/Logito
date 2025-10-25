@@ -1,6 +1,6 @@
 # Logito Makefile
 
-.PHONY: up down restart logs health mock reset clean test test-integration setup
+.PHONY: up down restart logs health load reset clean test test-integration setup
 
 # Start all services
 up:
@@ -28,8 +28,8 @@ health:
 	@curl -s http://localhost:9200/_cluster/health | jq . || echo "Service not responding"
 
 # Run load tests
-mock:
-	cd mockdata && go run main.go
+load:
+	cd loaddata && go run main.go
 
 # Reset database and run migrations
 reset:
@@ -76,7 +76,7 @@ help:
 	@echo "  restart         - Restart all services"
 	@echo "  logs            - View all service logs"
 	@echo "  health          - Check service health"
-	@echo "  mock            - Run load tests"
+	@echo "  load            - Run load tests"
 	@echo "  reset           - Reset database and run migrations"
 	@echo "  clean           - Clean up containers and volumes"
 	@echo "  test-integration- Run integration tests"
