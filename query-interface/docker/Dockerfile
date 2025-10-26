@@ -3,14 +3,17 @@ FROM golang:1.23-alpine AS builder
 
 WORKDIR /app
 
+# Copy configs first
+COPY .configs/ ./.configs/
+
 # copy go mod files
-COPY go.mod go.sum ./
+COPY query-interface/go.mod query-interface/go.sum ./
 
 # download dependencies
 RUN go mod download
 
 # copy source code
-COPY . .
+COPY query-interface/ .
 
 # build the application
 RUN CGO_ENABLED=0 GOOS=linux go build -a -installsuffix cgo -o query-interface ./cmd/server
@@ -25,8 +28,8 @@ WORKDIR /root/
 # copy the binary from builder stage
 COPY --from=builder /app/query-interface .
 
-# copy config files
-COPY --from=builder /app/configs ./configs
+# copy shared config file from builder stage
+COPY --from=builder /app/.configs/config.yaml ./config.yaml
 
 # expose port
 EXPOSE 4000

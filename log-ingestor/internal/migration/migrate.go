@@ -7,17 +7,16 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/lijuuu/Logito/log-ingestor/internal/logger"
 )
 
 //go:embed migration.sql
 var migrationSQL string
 
-// Migrate runs database migrations
 func Migrate(db *pgxpool.Pool) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	// check if tables exist
 	var tableExists bool
 	err := db.QueryRow(ctx, `
 		SELECT EXISTS (
@@ -28,18 +27,22 @@ func Migrate(db *pgxpool.Pool) error {
 	`).Scan(&tableExists)
 
 	if err != nil {
+		logger.Error("Failed to check if tables exist: %v", err)
 		return fmt.Errorf("failed to check if tables exist: %w", err)
 	}
 
 	if tableExists {
-		// tables already exist, skip migration
+		logger.Database("Tables already exist, skipping migration")
 		return nil
 	}
 
+	logger.Database("Running database migration...")
 	_, err = db.Exec(ctx, migrationSQL)
 	if err != nil {
+		logger.Error("Failed to run migration: %v", err)
 		return fmt.Errorf("failed to run migration: %w", err)
 	}
 
+	logger.Database("Database migration completed successfully")
 	return nil
 }

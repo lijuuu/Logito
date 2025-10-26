@@ -2,15 +2,24 @@ import React from 'react';
 import { Card, CardContent, CardHeader, CardTitle } from './ui/card';
 import { Button } from './ui/button';
 import { Badge } from './ui/badge';
-import { Database, Activity, AlertTriangle, CheckCircle, RefreshCw, Loader2 } from 'lucide-react';
-import { useSyncStatus, useForceRefresh } from '../hooks/useSyncStatus';
+import { Database, Activity, AlertTriangle, CheckCircle, RefreshCw, Loader2, RotateCcw } from 'lucide-react';
+import { useSyncStatus, useForceRefresh, useResetIndexing } from '../hooks/useSyncStatus';
+import { useAuth } from '../contexts/AuthContext';
 
 export const IndexingStatus: React.FC = () => {
+  const { user } = useAuth();
   const { data: syncStatus, isLoading, error, refetch } = useSyncStatus();
   const { mutate: forceRefresh, isPending: isRefreshing } = useForceRefresh();
+  const { mutate: resetIndexing, isPending: isResetting } = useResetIndexing();
 
   const handleForceRefresh = () => {
     forceRefresh();
+  };
+
+  const handleResetIndexing = () => {
+    if (window.confirm('Are you sure you want to reset the indexing status? This will mark all entries as unindexed and they will be re-indexed.')) {
+      resetIndexing();
+    }
   };
 
   const getStatusIcon = (status: string) => {
@@ -76,19 +85,36 @@ export const IndexingStatus: React.FC = () => {
             <Database className="h-5 w-5" />
             Indexing Status
           </div>
-          {/* <Button
-            variant="outline"
-            size="sm"
-            onClick={handleForceRefresh}
-            disabled={isRefreshing}
-          >
-            {isRefreshing ? (
-              <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-            ) : (
-              <RefreshCw className="h-4 w-4 mr-2" />
+          <div className="flex gap-2">
+            {user?.role === 'admin' && (
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={handleResetIndexing}
+                disabled={isResetting || isLoading}
+              >
+                {isResetting ? (
+                  <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                ) : (
+                  <RotateCcw className="h-4 w-4 mr-2" />
+                )}
+                Reset Indexing
+              </Button>
             )}
-            Force Refresh
-          </Button> */}
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => refetch()}
+              disabled={isLoading}
+            >
+              {isLoading ? (
+                <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+              ) : (
+                <RefreshCw className="h-4 w-4 mr-2" />
+              )}
+              Refresh
+            </Button>
+          </div>
         </CardTitle>
       </CardHeader>
       <CardContent>
@@ -112,9 +138,9 @@ export const IndexingStatus: React.FC = () => {
             <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
               <div className="text-center">
                 <div className="text-2xl font-bold text-blue-600">
-                  {(syncStatus.indexedInPostgres || 0).toLocaleString()}
+                  {(syncStatus.totalInES || 0).toLocaleString()}
                 </div>
-                <div className="text-xs text-muted-foreground">Total Indexed</div>
+                <div className="text-xs text-muted-foreground">Indexed in ES</div>
               </div>
 
               <div className="text-center">
@@ -144,19 +170,19 @@ export const IndexingStatus: React.FC = () => {
             </div>
 
             {/* Progress Bar */}
-            {(syncStatus.indexedInPostgres || 0) > 0 && (
+            {(syncStatus.totalInPostgres || 0) > 0 && (
               <div className="space-y-2">
                 <div className="flex justify-between text-xs text-muted-foreground">
                   <span>Indexing Progress</span>
                   <span>
-                    {Math.round(((syncStatus.indexedInPostgres || 0) / (syncStatus.totalInPostgres || 1)) * 100)}%
+                    {Math.min(100, Math.round(((syncStatus.totalInES || 0) / (syncStatus.totalInPostgres || 1)) * 100))}%
                   </span>
                 </div>
                 <div className="w-full bg-gray-200 rounded-full h-2">
                   <div
                     className="bg-blue-600 h-2 rounded-full transition-all duration-300"
                     style={{
-                      width: `${((syncStatus.indexedInPostgres || 0) / (syncStatus.totalInPostgres || 1)) * 100}%`
+                      width: `${Math.min(100, ((syncStatus.totalInES || 0) / (syncStatus.totalInPostgres || 1)) * 100)}%`
                     }}
                   />
                 </div>
@@ -182,6 +208,22 @@ export const IndexingStatus: React.FC = () => {
               <div className="text-sm text-green-600 bg-green-50 p-3 rounded-md">
                 <CheckCircle className="h-4 w-4 inline mr-2" />
                 All logs are indexed and up to date.
+              </div>
+            )}
+
+            {/* Counts Accuracy Warning */}
+            <div className="text-sm text-amber-600 bg-amber-50 p-3 rounded-md mb-3">
+              <AlertTriangle className="h-4 w-4 inline mr-2" />
+              <strong>Note:</strong> The counts may be inaccurate to avoid excessive count fetches to the backend database.
+              They will sync within a few seconds. If counts appear incorrect, use "Reset Indexing" to remove everything from Elasticsearch and start fresh.
+            </div>
+
+            {/* Mismatch Warning */}
+            {(syncStatus.indexedInPostgres || 0) > (syncStatus.totalInPostgres || 0) && (
+              <div className="text-sm text-yellow-600 bg-yellow-50 p-3 rounded-md">
+                <AlertTriangle className="h-4 w-4 inline mr-2" />
+                Warning: Indexing status mismatch detected. Some entries are marked as indexed but may not exist in Elasticsearch.
+                Use "Reset Indexing" to fix this issue.
               </div>
             )}
           </div>

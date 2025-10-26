@@ -26,8 +26,8 @@ http request → validation → in-memory batcher → async worker → postgres 
 
 the service uses yaml configuration files:
 
-- `configs/local.yml` - development settings
-- `configs/prod.yml` - production settings
+- `.configs/config.yaml` - development settings
+- `.configs/config.prod.yaml` - production settings
 
 ### key configuration options
 

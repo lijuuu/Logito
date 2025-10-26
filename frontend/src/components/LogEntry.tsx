@@ -33,7 +33,7 @@ export const LogEntry: React.FC<LogEntryProps> = ({ logEntry, onViewDetails }) =
   return (
     <Card className="mb-4 hover:shadow-md transition-shadow">
       <CardHeader className="pb-3">
-        <div className="flex items-start justify-between">
+        <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-3">
           <div className="flex items-center gap-3 flex-1 min-w-0">
             <button
               onClick={() => setExpanded(!expanded)}
@@ -46,18 +46,20 @@ export const LogEntry: React.FC<LogEntryProps> = ({ logEntry, onViewDetails }) =
               )}
             </button>
 
-            <div className="flex items-center gap-2 min-w-0 flex-1">
-              <span
-                className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium border ${getLogLevelColor(
-                  logEntry.level
-                )}`}
-              >
-                {logEntry.level.toUpperCase()}
-              </span>
+            <div className="flex flex-col sm:flex-row sm:items-center gap-1 sm:gap-2 min-w-0 flex-1">
+              <div className="flex items-center gap-2">
+                <span
+                  className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium border ${getLogLevelColor(
+                    logEntry.level
+                  )}`}
+                >
+                  {logEntry.level.toUpperCase()}
+                </span>
 
-              <span className="text-sm text-gray-500 font-mono">
-                #{logEntry.id}
-              </span>
+                <span className="text-sm text-gray-500 font-mono">
+                  #{logEntry.id}
+                </span>
+              </div>
 
               <span className="text-sm text-gray-500">
                 {formatRelativeTime(logEntry.timestamp)}
@@ -99,36 +101,36 @@ export const LogEntry: React.FC<LogEntryProps> = ({ logEntry, onViewDetails }) =
           </div>
 
           {/* Basic Info */}
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-3 text-sm">
-            <div>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-sm">
+            <div className="break-words">
               <span className="text-gray-500">Resource ID:</span>
-              <span className="ml-2 font-mono text-gray-900">{logEntry.resourceId}</span>
+              <span className="ml-2 font-mono text-gray-900 break-all">{logEntry.resourceId}</span>
             </div>
-            <div>
+            <div className="break-words">
               <span className="text-gray-500">Timestamp:</span>
-              <span className="ml-2 text-gray-900">{formatTimestamp(logEntry.timestamp)}</span>
+              <span className="ml-2 text-gray-900 break-all">{formatTimestamp(logEntry.timestamp)}</span>
             </div>
           </div>
 
           {/* Optional Fields */}
           {(logEntry.traceId || logEntry.spanId || logEntry.commit) && (
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-3 text-sm">
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 text-sm">
               {logEntry.traceId && (
-                <div>
+                <div className="break-words">
                   <span className="text-gray-500">Trace ID:</span>
-                  <span className="ml-2 font-mono text-gray-900">{logEntry.traceId}</span>
+                  <span className="ml-2 font-mono text-gray-900 break-all">{logEntry.traceId}</span>
                 </div>
               )}
               {logEntry.spanId && (
-                <div>
+                <div className="break-words">
                   <span className="text-gray-500">Span ID:</span>
-                  <span className="ml-2 font-mono text-gray-900">{logEntry.spanId}</span>
+                  <span className="ml-2 font-mono text-gray-900 break-all">{logEntry.spanId}</span>
                 </div>
               )}
               {logEntry.commit && (
-                <div>
+                <div className="break-words">
                   <span className="text-gray-500">Commit:</span>
-                  <span className="ml-2 font-mono text-gray-900">{logEntry.commit}</span>
+                  <span className="ml-2 font-mono text-gray-900 break-all">{logEntry.commit}</span>
                 </div>
               )}
             </div>
@@ -138,8 +140,8 @@ export const LogEntry: React.FC<LogEntryProps> = ({ logEntry, onViewDetails }) =
           {logEntry.metadata && Object.keys(logEntry.metadata).length > 0 && (
             <div>
               <span className="text-sm text-gray-500">Metadata:</span>
-              <div className="mt-1 p-3 bg-gray-50 rounded-md">
-                <pre className="text-xs text-gray-700 whitespace-pre-wrap">
+              <div className="mt-1 p-3 bg-gray-50 rounded-md overflow-x-auto">
+                <pre className="text-xs text-gray-700 whitespace-pre-wrap break-words">
                   {JSON.stringify(logEntry.metadata, null, 2)}
                 </pre>
               </div>

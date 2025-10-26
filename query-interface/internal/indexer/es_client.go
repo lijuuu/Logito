@@ -6,6 +6,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
+	"net/http"
 	"strings"
 	"time"
 
@@ -17,19 +19,50 @@ import (
 )
 
 type ESClient struct {
-	client    *elasticsearch.Client
-	indexName string
-	timeout   time.Duration
+	client       *elasticsearch.Client
+	indexName    string
+	timeout      time.Duration
+	healthConfig ElasticsearchHealthConfig
+	poolConfig   ElasticsearchPoolConfig
 }
 
-func NewESClient(host, indexName string, timeout time.Duration) (*ESClient, error) {
+type ElasticsearchPoolConfig struct {
+	MaxConnsPerHost int
+	MaxIdleConns    int
+	IdleConnTimeout time.Duration
+}
+
+type ElasticsearchHealthConfig struct {
+	CheckMinHealth     bool
+	MinHealthThreshold float64
+	HealthCheckTimeout time.Duration
+}
+
+type ESHealthStatus struct {
+	Status      string  `json:"status"`
+	HealthScore float64 `json:"health_score"`
+	Healthy     bool    `json:"healthy"`
+}
+
+func NewESClient(host, indexName string, timeout time.Duration, poolConfig ElasticsearchPoolConfig, healthConfig ElasticsearchHealthConfig) (*ESClient, error) {
+	transport := &http.Transport{
+		MaxIdleConns:    poolConfig.MaxIdleConns,
+		MaxConnsPerHost: poolConfig.MaxConnsPerHost,
+		IdleConnTimeout: poolConfig.IdleConnTimeout,
+		DialContext: (&net.Dialer{
+			Timeout:   30 * time.Second,
+			KeepAlive: 30 * time.Second,
+		}).DialContext,
+	}
+
 	cfg := elasticsearch.Config{
 		Addresses:     []string{host},
-		RetryOnStatus: []int{502, 503, 504, 429}, // retry config
+		RetryOnStatus: []int{502, 503, 504, 429},
 		MaxRetries:    3,
 		RetryBackoff: func(i int) time.Duration {
 			return time.Duration(i) * time.Second
 		},
+		Transport: transport,
 	}
 
 	client, err := elasticsearch.NewClient(cfg)
@@ -38,12 +71,13 @@ func NewESClient(host, indexName string, timeout time.Duration) (*ESClient, erro
 	}
 
 	esClient := &ESClient{
-		client:    client,
-		indexName: indexName,
-		timeout:   timeout,
+		client:       client,
+		indexName:    indexName,
+		timeout:      timeout,
+		healthConfig: healthConfig,
+		poolConfig:   poolConfig,
 	}
 
-	// test connection
 	if err := esClient.HealthCheck(context.Background()); err != nil {
 		return nil, fmt.Errorf("failed to connect to elasticsearch: %w", err)
 	}
@@ -51,7 +85,6 @@ func NewESClient(host, indexName string, timeout time.Duration) (*ESClient, erro
 	return esClient, nil
 }
 
-// healthcheck for elasticsearch cluster
 func (c *ESClient) HealthCheck(ctx context.Context) error {
 	ctx, cancel := context.WithTimeout(ctx, c.timeout)
 	defer cancel()
@@ -71,7 +104,87 @@ func (c *ESClient) HealthCheck(ctx context.Context) error {
 	return nil
 }
 
-// creates the logs index with proper mapping using migration
+// GetHealthStatus returns detailed health information including health score
+func (c *ESClient) GetHealthStatus(ctx context.Context) (*ESHealthStatus, error) {
+	ctx, cancel := context.WithTimeout(ctx, c.healthConfig.HealthCheckTimeout)
+	defer cancel()
+
+	res, err := c.client.Cluster.Health(
+		c.client.Cluster.Health.WithContext(ctx),
+		c.client.Cluster.Health.WithLevel("indices"),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get cluster health: %w", err)
+	}
+	defer res.Body.Close()
+
+	if res.IsError() {
+		return nil, fmt.Errorf("elasticsearch health check failed: %s", res.String())
+	}
+
+	var healthResponse struct {
+		Status                  string `json:"status"`
+		ActiveShards            int    `json:"active_shards"`
+		RelocatingShards        int    `json:"relocating_shards"`
+		InitializingShards      int    `json:"initializing_shards"`
+		UnassignedShards        int    `json:"unassigned_shards"`
+		DelayedUnassignedShards int    `json:"delayed_unassigned_shards"`
+		NumberOfNodes           int    `json:"number_of_nodes"`
+		NumberOfDataNodes       int    `json:"number_of_data_nodes"`
+		ActivePrimaryShards     int    `json:"active_primary_shards"`
+	}
+
+	if err := json.NewDecoder(res.Body).Decode(&healthResponse); err != nil {
+		return nil, fmt.Errorf("failed to decode health response: %w", err)
+	}
+
+	// Calculate health score based on shard status
+	totalShards := healthResponse.ActiveShards + healthResponse.RelocatingShards +
+		healthResponse.InitializingShards + healthResponse.UnassignedShards +
+		healthResponse.DelayedUnassignedShards
+
+	var healthScore float64
+	if totalShards > 0 {
+		healthyShards := healthResponse.ActiveShards + healthResponse.RelocatingShards
+		healthScore = float64(healthyShards) / float64(totalShards) * 100
+	} else {
+		healthScore = 100.0 // No shards means healthy
+	}
+
+	// Determine if cluster is healthy based on status and score
+	healthy := healthResponse.Status == "green" ||
+		(healthResponse.Status == "yellow" && healthScore >= c.healthConfig.MinHealthThreshold)
+
+	return &ESHealthStatus{
+		Status:      healthResponse.Status,
+		HealthScore: healthScore,
+		Healthy:     healthy,
+	}, nil
+}
+
+// IsHealthyForIndexing checks if ES is healthy enough for indexing
+func (c *ESClient) IsHealthyForIndexing(ctx context.Context) (bool, error) {
+	if !c.healthConfig.CheckMinHealth {
+		return true, nil 
+	}
+
+	healthStatus, err := c.GetHealthStatus(ctx)
+	if err != nil {
+		return false, fmt.Errorf("failed to check ES health: %w", err)
+	}
+
+	return healthStatus.Healthy && healthStatus.HealthScore >= c.healthConfig.MinHealthThreshold, nil
+}
+
+// GetPoolStats returns connection pool statistics
+func (c *ESClient) GetPoolStats() map[string]interface{} {
+	return map[string]interface{}{
+		"maxIdleConns":    c.poolConfig.MaxIdleConns,
+		"maxConnsPerHost": c.poolConfig.MaxConnsPerHost,
+		"idleConnTimeout": c.poolConfig.IdleConnTimeout,
+	}
+}
+
 func (c *ESClient) CreateIndex(ctx context.Context) error {
 	ctx, cancel := context.WithTimeout(ctx, c.timeout)
 	defer cancel()
@@ -84,7 +197,28 @@ func (c *ESClient) CreateIndex(ctx context.Context) error {
 	return nil
 }
 
-// creates the logs index with custom mapping using migration
+func (c *ESClient) DeleteIndex(ctx context.Context) error {
+	ctx, cancel := context.WithTimeout(ctx, c.timeout)
+	defer cancel()
+
+	req := esapi.IndicesDeleteRequest{
+		Index: []string{c.indexName},
+	}
+
+	res, err := req.Do(ctx, c.client)
+	if err != nil {
+		return fmt.Errorf("failed to delete index: %w", err)
+	}
+	defer res.Body.Close()
+
+	if res.IsError() {
+		body, _ := io.ReadAll(res.Body)
+		return fmt.Errorf("elasticsearch delete index error: %s", string(body))
+	}
+
+	return nil
+}
+
 func (c *ESClient) CreateIndexWithCustomMapping(ctx context.Context, customMapping string) error {
 	ctx, cancel := context.WithTimeout(ctx, c.timeout)
 	defer cancel()
@@ -97,7 +231,6 @@ func (c *ESClient) CreateIndexWithCustomMapping(ctx context.Context, customMappi
 	return nil
 }
 
-// checks if the index exists
 func (c *ESClient) IndexExists(ctx context.Context) (bool, error) {
 	ctx, cancel := context.WithTimeout(ctx, c.timeout)
 	defer cancel()
@@ -115,7 +248,6 @@ func (c *ESClient) IndexExists(ctx context.Context) (bool, error) {
 	return res.StatusCode == 200, nil
 }
 
-// indexes multiple log entries using bulk api
 func (c *ESClient) BulkIndex(ctx context.Context, entries []*logentry.LogEntry) error {
 	if len(entries) == 0 {
 		return nil
@@ -124,10 +256,8 @@ func (c *ESClient) BulkIndex(ctx context.Context, entries []*logentry.LogEntry) 
 	ctx, cancel := context.WithTimeout(ctx, c.timeout)
 	defer cancel()
 
-	// prepare bulk request body
 	var buf bytes.Buffer
 	for _, entry := range entries {
-		// create index action
 		action := map[string]interface{}{
 			"index": map[string]interface{}{
 				"_index": c.indexName,
@@ -135,7 +265,6 @@ func (c *ESClient) BulkIndex(ctx context.Context, entries []*logentry.LogEntry) 
 			},
 		}
 
-		// serialize action
 		actionJSON, err := json.Marshal(action)
 		if err != nil {
 			return fmt.Errorf("failed to marshal action: %w", err)
@@ -143,7 +272,6 @@ func (c *ESClient) BulkIndex(ctx context.Context, entries []*logentry.LogEntry) 
 		buf.Write(actionJSON)
 		buf.WriteByte('\n')
 
-		// serialize document
 		docJSON, err := json.Marshal(entry)
 		if err != nil {
 			return fmt.Errorf("failed to marshal document: %w", err)
@@ -152,10 +280,9 @@ func (c *ESClient) BulkIndex(ctx context.Context, entries []*logentry.LogEntry) 
 		buf.WriteByte('\n')
 	}
 
-	// execute bulk request
 	req := esapi.BulkRequest{
 		Body:    &buf,
-		Refresh: "false", // don't refresh for better performance
+		Refresh: "false",
 	}
 
 	res, err := req.Do(ctx, c.client)
@@ -172,7 +299,6 @@ func (c *ESClient) BulkIndex(ctx context.Context, entries []*logentry.LogEntry) 
 	return nil
 }
 
-// performs a search query on the index
 func (c *ESClient) Search(ctx context.Context, query map[string]interface{}) (*SearchResponse, error) {
 	ctx, cancel := context.WithTimeout(ctx, c.timeout)
 	defer cancel()
@@ -206,7 +332,6 @@ func (c *ESClient) Search(ctx context.Context, query map[string]interface{}) (*S
 	return &searchResp, nil
 }
 
-// elasticsearch search response structure
 type SearchResponse struct {
 	Took         int64                  `json:"took"`
 	TimedOut     bool                   `json:"timed_out"`

@@ -13,8 +13,8 @@ export const StatsCards: React.FC<StatsCardsProps> = ({ filters }) => {
 
   if (isLoading) {
     return (
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-6">
-        {[...Array(4)].map((_, i) => (
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-6 gap-4 sm:gap-6 mb-6">
+        {[...Array(6)].map((_, i) => (
           <Card key={i} className="animate-pulse">
             <CardHeader className="pb-2">
               <div className="h-4 bg-gray-200 rounded w-3/4"></div>
@@ -31,10 +31,22 @@ export const StatsCards: React.FC<StatsCardsProps> = ({ filters }) => {
   const totalCount = counts?.counts?.total || 0;
   const levelCounts = counts?.counts?.byLevel || [];
 
-  const errorCount = levelCounts.find(l => l.key.toLowerCase() === 'error')?.docCount || 0;
-  const warnCount = levelCounts.find(l => l.key.toLowerCase() === 'warn' || l.key.toLowerCase() === 'warning')?.docCount || 0;
-  const infoCount = levelCounts.find(l => l.key.toLowerCase() === 'info')?.docCount || 0;
-  const debugCount = levelCounts.find(l => l.key.toLowerCase() === 'debug')?.docCount || 0;
+  // Debug logging
+  console.log('Counts data:', counts);
+  console.log('Level counts:', levelCounts);
+
+  const fatalCount = levelCounts.find(l => l.key === 'FATAL')?.doc_count || 0;
+  const errorCount = levelCounts.find(l => l.key === 'ERROR')?.doc_count || 0;
+  const warnCount = levelCounts.find(l => l.key === 'WARN')?.doc_count || 0;
+  const infoCount = levelCounts.find(l => l.key === 'INFO')?.doc_count || 0;
+  const debugCount = levelCounts.find(l => l.key === 'DEBUG')?.doc_count || 0;
+
+  // Debug logging for individual counts
+  console.log('Fatal count:', fatalCount);
+  console.log('Error count:', errorCount);
+  console.log('Warn count:', warnCount);
+  console.log('Info count:', infoCount);
+  console.log('Debug count:', debugCount);
 
   const stats = [
     {
@@ -43,6 +55,13 @@ export const StatsCards: React.FC<StatsCardsProps> = ({ filters }) => {
       icon: Activity,
       color: 'text-blue-600',
       bgColor: 'bg-blue-50',
+    },
+    {
+      title: 'Fatal',
+      value: fatalCount.toLocaleString(),
+      icon: AlertTriangle,
+      color: 'text-red-800',
+      bgColor: 'bg-red-100',
     },
     {
       title: 'Errors',
@@ -59,6 +78,13 @@ export const StatsCards: React.FC<StatsCardsProps> = ({ filters }) => {
       bgColor: 'bg-yellow-50',
     },
     {
+      title: 'Info',
+      value: infoCount.toLocaleString(),
+      icon: Info,
+      color: 'text-green-600',
+      bgColor: 'bg-green-50',
+    },
+    {
       title: 'Debug',
       value: debugCount.toLocaleString(),
       icon: Bug,
@@ -68,7 +94,7 @@ export const StatsCards: React.FC<StatsCardsProps> = ({ filters }) => {
   ];
 
   return (
-    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-6">
+    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-6 gap-4 sm:gap-6 mb-6">
       {stats.map((stat) => {
         const Icon = stat.icon;
         return (

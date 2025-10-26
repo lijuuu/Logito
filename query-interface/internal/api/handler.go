@@ -2,25 +2,25 @@ package api
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
-	"log"
 	"net/http"
 	"regexp"
 	"strconv"
 	"strings"
 	"time"
 
+	"github.com/lijuuu/Logito/query-interface/internal/auth"
+	"github.com/lijuuu/Logito/query-interface/internal/config"
+	"github.com/lijuuu/Logito/query-interface/internal/dlq"
 	"github.com/lijuuu/Logito/query-interface/internal/indexer"
+	"github.com/lijuuu/Logito/query-interface/internal/logger"
 	"github.com/lijuuu/Logito/query-interface/internal/worker"
 
 	"github.com/gin-gonic/gin"
 )
 
-// validatePagination validates pagination parameters and returns error if invalid
-// supports high page numbers up to max_result_window limit (1,000,000)
 func validatePagination(page, limit int) error {
-	maxOffset := 10000000 // max_result_window setting in elasticsearch mapping
+	maxOffset := 10000000
 	offset := (page - 1) * limit
 	if offset >= maxOffset {
 		return fmt.Errorf("page %d with limit %d exceeds maximum offset of %d. Please use a smaller page number or larger limit", page, limit, maxOffset)
@@ -28,27 +28,29 @@ func validatePagination(page, limit int) error {
 	return nil
 }
 
-// handles query interface requests
 type Handler struct {
 	esClient    *indexer.ESClient
 	indexWorker *worker.IndexWorker
 	fetcher     *indexer.Fetcher
+	dlqClient   *dlq.DLQClient
+	authService *auth.AuthService
+	config      *config.Config
 }
 
-// creates a new query handler
-func NewHandler(esClient *indexer.ESClient, indexWorker *worker.IndexWorker, fetcher *indexer.Fetcher) *Handler {
+func NewHandler(esClient *indexer.ESClient, indexWorker *worker.IndexWorker, fetcher *indexer.Fetcher, dlqClient *dlq.DLQClient, authService *auth.AuthService, cfg *config.Config) *Handler {
 	return &Handler{
 		esClient:    esClient,
 		indexWorker: indexWorker,
 		fetcher:     fetcher,
+		dlqClient:   dlqClient,
+		authService: authService,
+		config:      cfg,
 	}
 }
 
-// handles search requests
 func (h *Handler) Search(c *gin.Context) {
 	startTime := time.Now()
 
-	// parse query parameters
 	message := c.Query("message")
 	regex := c.Query("regex")
 	level := c.Query("level")
@@ -58,10 +60,6 @@ func (h *Handler) Search(c *gin.Context) {
 	commit := c.Query("commit")
 	parentResourceId := c.Query("parentResourceId")
 
-	log.Printf("Search request - Message: '%s', Regex: '%s', Level: '%s', ResourceID: '%s', TraceID: '%s', SpanID: '%s', Commit: '%s', ParentResourceID: '%s'",
-		message, regex, level, resourceId, traceId, spanId, commit, parentResourceId)
-
-	// parse pagination
 	page := 1
 	limit := 10
 	if p := c.Query("page"); p != "" {
@@ -85,7 +83,6 @@ func (h *Handler) Search(c *gin.Context) {
 		}
 	}
 
-	// validate pagination limits
 	if err := validatePagination(page, limit); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{
 			"error": err.Error(),
@@ -93,14 +90,9 @@ func (h *Handler) Search(c *gin.Context) {
 		return
 	}
 
-	// parse date range
 	startTimeParam := c.Query("startTime")
 	endTimeParam := c.Query("endTime")
 
-	log.Printf("Search pagination - Page: %d, Limit: %d, StartTime: %s, EndTime: %s",
-		page, limit, startTimeParam, endTimeParam)
-
-	// validate regex if provided
 	if regex != "" {
 		if err := h.validateRegex(regex); err != nil {
 			c.JSON(http.StatusBadRequest, gin.H{
@@ -110,37 +102,28 @@ func (h *Handler) Search(c *gin.Context) {
 		}
 	}
 
-	// build elasticsearch query
 	esQuery := h.buildSearchQuery(message, regex, level, resourceId, traceId, spanId, commit, parentResourceId, startTimeParam, endTimeParam, page, limit)
 
-	// debug: log the elasticsearch query
-	queryJSON, _ := json.MarshalIndent(esQuery, "", "  ")
-	log.Printf("Elasticsearch Query: %s", string(queryJSON))
-
-	// execute search
 	ctx, cancel := context.WithTimeout(c.Request.Context(), 10*time.Second)
 	defer cancel()
 
 	response, err := h.esClient.Search(ctx, esQuery)
 	if err != nil {
-		log.Printf("Search failed: %v", err)
+		logger.Error("Search failed: %v", err)
 		c.JSON(http.StatusInternalServerError, gin.H{
 			"error": "search failed",
 		})
 		return
 	}
 
-	// log search results
-	log.Printf("Search completed - Total: %d, Results: %d, Took: %dms, RequestDuration: %v",
+	logger.Query("Search completed - Total: %d, Results: %d, Took: %dms, RequestDuration: %v",
 		response.Hits.Total.Value, len(response.Hits.Hits), response.Took, time.Since(startTime))
 
-	// calculate pagination info
 	total := response.Hits.Total.Value
-	totalPages := (total + int64(limit) - 1) / int64(limit) // ceiling division
+	totalPages := (total + int64(limit) - 1) / int64(limit)
 	hasNext := int64(page) < totalPages
 	hasPrev := page > 1
 
-	// format response
 	c.JSON(http.StatusOK, gin.H{
 		"total":      total,
 		"page":       page,
@@ -153,9 +136,7 @@ func (h *Handler) Search(c *gin.Context) {
 	})
 }
 
-// buildSearchQuery builds the elasticsearch query from parameters
 func (h *Handler) buildSearchQuery(message, regex, level, resourceId, traceId, spanId, commit, parentResourceId, startTime, endTime string, page, limit int) map[string]interface{} {
-	// base query structure
 	esQuery := map[string]interface{}{
 		"from":             (page - 1) * limit,
 		"size":             limit,
@@ -165,12 +146,10 @@ func (h *Handler) buildSearchQuery(message, regex, level, resourceId, traceId, s
 		},
 	}
 
-	// build bool query
 	boolQuery := map[string]interface{}{
 		"must": []map[string]interface{}{},
 	}
 
-	// add message search to must clause
 	if message != "" {
 		messageQuery := h.buildMessageQuery(message)
 		if messageQuery != nil {
@@ -178,7 +157,6 @@ func (h *Handler) buildSearchQuery(message, regex, level, resourceId, traceId, s
 		}
 	}
 
-	// add regex search to must clause
 	if regex != "" {
 		regexQuery := h.buildRegexQuery(regex)
 		if regexQuery != nil {
@@ -186,7 +164,6 @@ func (h *Handler) buildSearchQuery(message, regex, level, resourceId, traceId, s
 		}
 	}
 
-	// add field filters
 	filters := []map[string]interface{}{}
 
 	if level != "" {
@@ -237,7 +214,6 @@ func (h *Handler) buildSearchQuery(message, regex, level, resourceId, traceId, s
 		})
 	}
 
-	// add date range filter
 	if startTime != "" || endTime != "" {
 		dateRange := map[string]interface{}{}
 		if startTime != "" {
@@ -254,12 +230,10 @@ func (h *Handler) buildSearchQuery(message, regex, level, resourceId, traceId, s
 		})
 	}
 
-	// add filters to bool query
 	if len(filters) > 0 {
 		boolQuery["filter"] = filters
 	}
 
-	// add bool query to main query
 	esQuery["query"] = map[string]interface{}{
 		"bool": boolQuery,
 	}
@@ -267,10 +241,9 @@ func (h *Handler) buildSearchQuery(message, regex, level, resourceId, traceId, s
 	return esQuery
 }
 
-// buildMetadataQuery builds an aggregation query for metadata
 func (h *Handler) buildMetadataQuery(level, resourceId, startTime, endTime string) map[string]interface{} {
 	esQuery := map[string]interface{}{
-		"size": 0, // We only want aggregations, not documents
+		"size": 0,
 		"aggs": map[string]interface{}{
 			"levels": map[string]interface{}{
 				"terms": map[string]interface{}{
@@ -304,7 +277,7 @@ func (h *Handler) buildMetadataQuery(level, resourceId, startTime, endTime strin
 			},
 			"parentResourceIds": map[string]interface{}{
 				"terms": map[string]interface{}{
-					"field": "metadata.parentResourceId",
+					"field": "metadata.parentResourceId.keyword",
 					"size":  100,
 				},
 			},
@@ -339,7 +312,6 @@ func (h *Handler) buildMetadataQuery(level, resourceId, startTime, endTime strin
 		})
 	}
 
-	//Add date range filter
 	if startTime != "" || endTime != "" {
 		dateRange := map[string]interface{}{}
 		if startTime != "" {
@@ -356,12 +328,10 @@ func (h *Handler) buildMetadataQuery(level, resourceId, startTime, endTime strin
 		})
 	}
 
-	//Add filters to bool query
 	if len(filters) > 0 {
 		boolQuery["filter"] = filters
 	}
 
-	//Add bool query to main query
 	esQuery["query"] = map[string]interface{}{
 		"bool": boolQuery,
 	}
@@ -369,10 +339,9 @@ func (h *Handler) buildMetadataQuery(level, resourceId, startTime, endTime strin
 	return esQuery
 }
 
-// buildCountQuery builds an aggregation query for counts
 func (h *Handler) buildCountQuery(level, resourceId, startTime, endTime string) map[string]interface{} {
 	esQuery := map[string]interface{}{
-		"size": 0, // We only want aggregations, not documents
+		"size": 0,
 		"aggs": map[string]interface{}{
 			"total_count": map[string]interface{}{
 				"value_count": map[string]interface{}{
@@ -431,7 +400,6 @@ func (h *Handler) buildCountQuery(level, resourceId, startTime, endTime string) 
 		})
 	}
 
-	//Add date range filter
 	if startTime != "" || endTime != "" {
 		dateRange := map[string]interface{}{}
 		if startTime != "" {
@@ -448,12 +416,10 @@ func (h *Handler) buildCountQuery(level, resourceId, startTime, endTime string) 
 		})
 	}
 
-	//Add filters to bool query
 	if len(filters) > 0 {
 		boolQuery["filter"] = filters
 	}
 
-	//Add bool query to main query
 	esQuery["query"] = map[string]interface{}{
 		"bool": boolQuery,
 	}
@@ -461,14 +427,11 @@ func (h *Handler) buildCountQuery(level, resourceId, startTime, endTime string) 
 	return esQuery
 }
 
-// extractMetadataFromResponse extracts metadata from elasticsearch response
 func (h *Handler) extractMetadataFromResponse(response *indexer.SearchResponse) map[string]interface{} {
 	metadata := make(map[string]interface{})
 
-	// extract aggregations from the actual es response
 	if response.Aggregations != nil {
 		aggregations := response.Aggregations
-		// extract levels aggregation
 		if levels, ok := aggregations["levels"].(map[string]interface{}); ok {
 			if buckets, ok := levels["buckets"].([]interface{}); ok {
 				metadata["levels"] = buckets
@@ -479,7 +442,6 @@ func (h *Handler) extractMetadataFromResponse(response *indexer.SearchResponse) 
 			metadata["levels"] = []interface{}{}
 		}
 
-		// extract resourceids aggregation
 		if resourceIds, ok := aggregations["resourceIds"].(map[string]interface{}); ok {
 			if buckets, ok := resourceIds["buckets"].([]interface{}); ok {
 				metadata["resourceIds"] = buckets
@@ -490,7 +452,6 @@ func (h *Handler) extractMetadataFromResponse(response *indexer.SearchResponse) 
 			metadata["resourceIds"] = []interface{}{}
 		}
 
-		// extract traceids aggregation
 		if traceIds, ok := aggregations["traceIds"].(map[string]interface{}); ok {
 			if buckets, ok := traceIds["buckets"].([]interface{}); ok {
 				metadata["traceIds"] = buckets
@@ -501,7 +462,6 @@ func (h *Handler) extractMetadataFromResponse(response *indexer.SearchResponse) 
 			metadata["traceIds"] = []interface{}{}
 		}
 
-		// extract spanids aggregation
 		if spanIds, ok := aggregations["spanIds"].(map[string]interface{}); ok {
 			if buckets, ok := spanIds["buckets"].([]interface{}); ok {
 				metadata["spanIds"] = buckets
@@ -512,7 +472,6 @@ func (h *Handler) extractMetadataFromResponse(response *indexer.SearchResponse) 
 			metadata["spanIds"] = []interface{}{}
 		}
 
-		// extract commits aggregation
 		if commits, ok := aggregations["commits"].(map[string]interface{}); ok {
 			if buckets, ok := commits["buckets"].([]interface{}); ok {
 				metadata["commits"] = buckets
@@ -523,7 +482,6 @@ func (h *Handler) extractMetadataFromResponse(response *indexer.SearchResponse) 
 			metadata["commits"] = []interface{}{}
 		}
 
-		// extract parentresourceids aggregation
 		if parentResourceIds, ok := aggregations["parentResourceIds"].(map[string]interface{}); ok {
 			if buckets, ok := parentResourceIds["buckets"].([]interface{}); ok {
 				metadata["parentResourceIds"] = buckets
@@ -534,14 +492,12 @@ func (h *Handler) extractMetadataFromResponse(response *indexer.SearchResponse) 
 			metadata["parentResourceIds"] = []interface{}{}
 		}
 
-		// extract timestamp range stats
 		if timestampRange, ok := aggregations["timestamp_range"].(map[string]interface{}); ok {
 			metadata["timestampRange"] = timestampRange
 		} else {
 			metadata["timestampRange"] = map[string]interface{}{}
 		}
 	} else {
-		// fallback to empty structure if no aggregations
 		metadata["levels"] = []interface{}{}
 		metadata["resourceIds"] = []interface{}{}
 		metadata["traceIds"] = []interface{}{}
@@ -554,14 +510,11 @@ func (h *Handler) extractMetadataFromResponse(response *indexer.SearchResponse) 
 	return metadata
 }
 
-// extractCountsFromResponse extracts counts from elasticsearch response
 func (h *Handler) extractCountsFromResponse(response *indexer.SearchResponse) map[string]interface{} {
 	counts := make(map[string]interface{})
 
-	// extract aggregations from the actual es response
 	if response.Aggregations != nil {
 		aggregations := response.Aggregations
-		// extract total count
 		if totalCount, ok := aggregations["total_count"].(map[string]interface{}); ok {
 			if value, ok := totalCount["value"].(float64); ok {
 				counts["total"] = int64(value)
@@ -572,7 +525,6 @@ func (h *Handler) extractCountsFromResponse(response *indexer.SearchResponse) ma
 			counts["total"] = int64(0)
 		}
 
-		// extract level counts
 		if levelCounts, ok := aggregations["level_counts"].(map[string]interface{}); ok {
 			if buckets, ok := levelCounts["buckets"].([]interface{}); ok {
 				counts["byLevel"] = buckets
@@ -583,7 +535,6 @@ func (h *Handler) extractCountsFromResponse(response *indexer.SearchResponse) ma
 			counts["byLevel"] = []interface{}{}
 		}
 
-		// extract resource counts
 		if resourceCounts, ok := aggregations["resource_counts"].(map[string]interface{}); ok {
 			if buckets, ok := resourceCounts["buckets"].([]interface{}); ok {
 				counts["byResource"] = buckets
@@ -594,7 +545,6 @@ func (h *Handler) extractCountsFromResponse(response *indexer.SearchResponse) ma
 			counts["byResource"] = []interface{}{}
 		}
 
-		// extract hourly counts
 		if hourlyCounts, ok := aggregations["hourly_counts"].(map[string]interface{}); ok {
 			if buckets, ok := hourlyCounts["buckets"].([]interface{}); ok {
 				counts["hourly"] = buckets
@@ -605,7 +555,6 @@ func (h *Handler) extractCountsFromResponse(response *indexer.SearchResponse) ma
 			counts["hourly"] = []interface{}{}
 		}
 
-		// extract daily counts
 		if dailyCounts, ok := aggregations["daily_counts"].(map[string]interface{}); ok {
 			if buckets, ok := dailyCounts["buckets"].([]interface{}); ok {
 				counts["daily"] = buckets
@@ -616,7 +565,6 @@ func (h *Handler) extractCountsFromResponse(response *indexer.SearchResponse) ma
 			counts["daily"] = []interface{}{}
 		}
 	} else {
-		// fallback to empty structure if no aggregations
 		counts["total"] = int64(0)
 		counts["byLevel"] = []interface{}{}
 		counts["byResource"] = []interface{}{}
@@ -627,29 +575,22 @@ func (h *Handler) extractCountsFromResponse(response *indexer.SearchResponse) ma
 	return counts
 }
 
-// GetMetadata handles metadata aggregation requests
 func (h *Handler) GetMetadata(c *gin.Context) {
 	startTime := time.Now()
 
-	// parse query parameters for filtering
 	level := c.Query("level")
 	resourceId := c.Query("resourceId")
 	startTimeParam := c.Query("startTime")
 	endTimeParam := c.Query("endTime")
 
-	log.Printf("Metadata request - Level: %s, ResourceID: %s, StartTime: %s, EndTime: %s",
-		level, resourceId, startTimeParam, endTimeParam)
-
-	// build aggregation query
 	esQuery := h.buildMetadataQuery(level, resourceId, startTimeParam, endTimeParam)
 
-	//Execute search
 	ctx, cancel := context.WithTimeout(c.Request.Context(), 10*time.Second)
 	defer cancel()
 
 	response, err := h.esClient.Search(ctx, esQuery)
 	if err != nil {
-		log.Printf("Metadata aggregation failed: %v", err)
+		logger.Error("Metadata aggregation failed: %v", err)
 		c.JSON(http.StatusInternalServerError, gin.H{
 			"error":   "metadata aggregation failed",
 			"details": err.Error(),
@@ -657,15 +598,12 @@ func (h *Handler) GetMetadata(c *gin.Context) {
 		return
 	}
 
-	// extract aggregations from response
 	metadata := h.extractMetadataFromResponse(response)
 
-	log.Printf("Metadata completed - Took: %dms, RequestDuration: %v, TotalHits: %d",
+	logger.Query("Metadata completed - Took: %dms, RequestDuration: %v, TotalHits: %d",
 		response.Took, time.Since(startTime), response.Hits.Total.Value)
 
-	// if no data in elasticsearch, return empty metadata structure
 	if response.Hits.Total.Value == 0 {
-		log.Printf("No data found in Elasticsearch, returning empty metadata")
 		metadata = map[string]interface{}{
 			"levels":            []interface{}{},
 			"resourceIds":       []interface{}{},
@@ -683,39 +621,31 @@ func (h *Handler) GetMetadata(c *gin.Context) {
 	})
 }
 
-// GetCounts handles count aggregation requests
 func (h *Handler) GetCounts(c *gin.Context) {
 	startTime := time.Now()
 
-	// parse query parameters for filtering
 	level := c.Query("level")
 	resourceId := c.Query("resourceId")
 	startTimeParam := c.Query("startTime")
 	endTimeParam := c.Query("endTime")
 
-	log.Printf("Counts request - Level: %s, ResourceID: %s, StartTime: %s, EndTime: %s",
-		level, resourceId, startTimeParam, endTimeParam)
-
-	// build count aggregation query
 	esQuery := h.buildCountQuery(level, resourceId, startTimeParam, endTimeParam)
 
-	//Execute search
 	ctx, cancel := context.WithTimeout(c.Request.Context(), 10*time.Second)
 	defer cancel()
 
 	response, err := h.esClient.Search(ctx, esQuery)
 	if err != nil {
-		log.Printf("Count aggregation failed: %v", err)
+		logger.Error("Count aggregation failed: %v", err)
 		c.JSON(http.StatusInternalServerError, gin.H{
 			"error": "count aggregation failed",
 		})
 		return
 	}
 
-	// extract counts from response
 	counts := h.extractCountsFromResponse(response)
 
-	log.Printf("Counts completed - Took: %dms, RequestDuration: %v",
+	logger.Query("Counts completed - Took: %dms, RequestDuration: %v",
 		response.Took, time.Since(startTime))
 
 	c.JSON(http.StatusOK, gin.H{
@@ -724,22 +654,17 @@ func (h *Handler) GetCounts(c *gin.Context) {
 	})
 }
 
-// GetLogEntry handles single log entry retrieval
 func (h *Handler) GetLogEntry(c *gin.Context) {
 	startTime := time.Now()
 
 	id := c.Param("id")
 	if id == "" {
-		log.Printf("GetLogEntry failed - missing id parameter")
 		c.JSON(http.StatusBadRequest, gin.H{
 			"error": "id parameter is required",
 		})
 		return
 	}
 
-	log.Printf("GetLogEntry request - ID: %s", id)
-
-	// build query to get specific log entry
 	esQuery := map[string]interface{}{
 		"query": map[string]interface{}{
 			"term": map[string]interface{}{
@@ -749,13 +674,12 @@ func (h *Handler) GetLogEntry(c *gin.Context) {
 		"size": 1,
 	}
 
-	//Execute search
 	ctx, cancel := context.WithTimeout(c.Request.Context(), 5*time.Second)
 	defer cancel()
 
 	response, err := h.esClient.Search(ctx, esQuery)
 	if err != nil {
-		log.Printf("GetLogEntry failed for ID %s: %v", id, err)
+		logger.Error("GetLogEntry failed for ID %s: %v", id, err)
 		c.JSON(http.StatusInternalServerError, gin.H{
 			"error": "failed to retrieve log entry",
 		})
@@ -763,14 +687,13 @@ func (h *Handler) GetLogEntry(c *gin.Context) {
 	}
 
 	if len(response.Hits.Hits) == 0 {
-		log.Printf("GetLogEntry - log entry not found for ID: %s", id)
 		c.JSON(http.StatusNotFound, gin.H{
 			"error": "log entry not found",
 		})
 		return
 	}
 
-	log.Printf("GetLogEntry completed - ID: %s, Took: %dms, RequestDuration: %v",
+	logger.Query("GetLogEntry completed - ID: %s, Took: %dms, RequestDuration: %v",
 		id, response.Took, time.Since(startTime))
 
 	c.JSON(http.StatusOK, gin.H{
@@ -779,18 +702,15 @@ func (h *Handler) GetLogEntry(c *gin.Context) {
 	})
 }
 
-// HealthCheck handles health check endpoint
 func (h *Handler) HealthCheck(c *gin.Context) {
 	startTime := time.Now()
-
-	log.Printf("Health check request")
 
 	ctx, cancel := context.WithTimeout(c.Request.Context(), 5*time.Second)
 	defer cancel()
 
 	err := h.esClient.HealthCheck(ctx)
 	if err != nil {
-		log.Printf("Health check failed: %v", err)
+		logger.Error("Health check failed: %v", err)
 		c.JSON(http.StatusServiceUnavailable, gin.H{
 			"status": "unhealthy",
 			"error":  err.Error(),
@@ -798,7 +718,7 @@ func (h *Handler) HealthCheck(c *gin.Context) {
 		return
 	}
 
-	log.Printf("Health check completed - Status: healthy, RequestDuration: %v", time.Since(startTime))
+	logger.Info("Health check completed - Status: healthy, RequestDuration: %v", time.Since(startTime))
 
 	c.JSON(http.StatusOK, gin.H{
 		"status":    "healthy",
@@ -807,22 +727,54 @@ func (h *Handler) HealthCheck(c *gin.Context) {
 	})
 }
 
-// GetSyncStatus returns the current index sync status
+// ESHealthCheck provides detailed Elasticsearch health information
+func (h *Handler) ESHealthCheck(c *gin.Context) {
+	startTime := time.Now()
+
+	ctx, cancel := context.WithTimeout(c.Request.Context(), 10*time.Second)
+	defer cancel()
+
+	healthStatus, err := h.esClient.GetHealthStatus(ctx)
+	if err != nil {
+		logger.Error("ES health check failed: %v", err)
+		c.JSON(http.StatusServiceUnavailable, gin.H{
+			"status":    "unhealthy",
+			"error":     err.Error(),
+			"timestamp": time.Now().Format(time.RFC3339),
+			"duration":  time.Since(startTime).String(),
+		})
+		return
+	}
+
+	// Get connection pool stats
+	poolStats := h.esClient.GetPoolStats()
+
+	logger.Info("ES health check completed - Status: %s, HealthScore: %.1f%%, Duration: %v",
+		healthStatus.Status, healthStatus.HealthScore, time.Since(startTime))
+
+	c.JSON(http.StatusOK, gin.H{
+		"status":      healthStatus.Status,
+		"healthScore": healthStatus.HealthScore,
+		"healthy":     healthStatus.Healthy,
+		"timestamp":   time.Now().Format(time.RFC3339),
+		"duration":    time.Since(startTime).String(),
+		"poolStats":   poolStats,
+	})
+}
+
 func (h *Handler) GetSyncStatus(c *gin.Context) {
 	ctx, cancel := context.WithTimeout(c.Request.Context(), 10*time.Second)
 	defer cancel()
 
-	// get count statistics
 	counts, err := h.fetcher.GetCounts(ctx, h.esClient)
 	if err != nil {
-		log.Printf("Failed to get counts: %v", err)
+		logger.Error("Failed to get counts: %v", err)
 		c.JSON(http.StatusInternalServerError, gin.H{
 			"error": "failed to get count statistics",
 		})
 		return
 	}
 
-	// check if worker is healthy
 	workerHealthy := h.indexWorker.HealthCheck(ctx) == nil
 
 	status := "healthy"
@@ -833,70 +785,76 @@ func (h *Handler) GetSyncStatus(c *gin.Context) {
 		status = "unhealthy"
 	}
 
-	// add status and worker health to response
 	counts["status"] = status
 	counts["workerHealthy"] = workerHealthy
 
 	c.JSON(http.StatusOK, counts)
 }
 
-// buildMessageQuery builds a message query with support for proximity search
+func (h *Handler) ResetIndexingStatus(c *gin.Context) {
+	userRole, exists := c.Get("user_role")
+	if !exists || userRole != auth.RoleAdmin {
+		c.JSON(http.StatusForbidden, gin.H{"error": "Admin access required"})
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(c.Request.Context(), 60*time.Second)
+	defer cancel()
+
+	logger.Info("Clearing Elasticsearch index...")
+	err := h.esClient.DeleteIndex(ctx)
+	if err != nil {
+		logger.Error("Failed to clear Elasticsearch index: %v", err)
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"error": "failed to clear Elasticsearch index",
+		})
+		return
+	}
+
+	// Recreate the Elasticsearch index
+	logger.Info("Recreating Elasticsearch index...")
+	err = h.esClient.CreateIndex(ctx)
+	if err != nil {
+		logger.Error("Failed to recreate Elasticsearch index: %v", err)
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"error": "failed to recreate Elasticsearch index",
+		})
+		return
+	}
+
+	// Reset all indexed entries to unindexed in PostgreSQL
+	logger.Info("Resetting PostgreSQL indexing status...")
+	err = h.fetcher.ResetIndexedToUnindexed(ctx)
+	if err != nil {
+		logger.Error("Failed to reset indexing status: %v", err)
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"error": "failed to reset indexing status",
+		})
+		return
+	}
+
+	logger.Info("Successfully reset indexing status - cleared ES index and reset PostgreSQL")
+	c.JSON(http.StatusOK, gin.H{
+		"message":   "Indexing status reset successfully - Elasticsearch cleared and PostgreSQL reset",
+		"timestamp": time.Now().UTC(),
+	})
+}
+
 func (h *Handler) buildMessageQuery(message string) map[string]interface{} {
 	if message == "" {
 		return nil
 	}
 
-	// Check if the message contains proximity operators (+)
-	if strings.Contains(message, "+") {
-		// Split by + to get individual terms
-		terms := strings.Split(message, "+")
-		// Trim whitespace from each term
-		for i, term := range terms {
-			terms[i] = strings.TrimSpace(term)
-		}
-
-		// Filter out empty terms
-		validTerms := []string{}
-		for _, term := range terms {
-			if term != "" {
-				validTerms = append(validTerms, term)
-			}
-		}
-
-		if len(validTerms) == 0 {
-			return nil
-		}
-
-		if len(validTerms) == 1 {
-			// Single term, use regular match
-			return map[string]interface{}{
-				"match": map[string]interface{}{
-					"message": validTerms[0],
-				},
-			}
-		}
-
-		// Multiple terms, use span_near for proximity search
-		// This ensures terms are close to each other (within 5 words by default)
-		spanQueries := []map[string]interface{}{}
-		for _, term := range validTerms {
-			spanQueries = append(spanQueries, map[string]interface{}{
-				"span_term": map[string]interface{}{
-					"message": term,
-				},
-			})
-		}
-
+	// For sentence search (with spaces), use match_phrase for better phrase matching
+	if strings.Contains(message, " ") {
 		return map[string]interface{}{
-			"span_near": map[string]interface{}{
-				"clauses":  spanQueries,
-				"slop":     0,    // Terms must be adjacent (next to each other)
-				"in_order": true, // Terms must be in the specified order
+			"match_phrase": map[string]interface{}{
+				"message": message,
 			},
 		}
 	}
 
-	// Regular message search without proximity operators
+	// For single word search, use match
 	return map[string]interface{}{
 		"match": map[string]interface{}{
 			"message": message,
@@ -904,25 +862,294 @@ func (h *Handler) buildMessageQuery(message string) map[string]interface{} {
 	}
 }
 
-// validateRegex validates a regex pattern
 func (h *Handler) validateRegex(pattern string) error {
 	_, err := regexp.Compile(pattern)
 	return err
 }
 
-// buildRegexQuery builds a regex query for elasticsearch
 func (h *Handler) buildRegexQuery(pattern string) map[string]interface{} {
 	if pattern == "" {
 		return nil
 	}
 
-	// Use regexp query for pattern matching on the message field
-	return map[string]interface{}{
-		"regexp": map[string]interface{}{
-			"message": map[string]interface{}{
-				"value": pattern,
-				"flags": "ALL",
+	// Use bool query with should clauses to search across all text fields
+	shouldClauses := []map[string]interface{}{
+		{
+			"regexp": map[string]interface{}{
+				"message": map[string]interface{}{
+					"value": pattern,
+					"flags": "ALL",
+				},
+			},
+		},
+		{
+			"regexp": map[string]interface{}{
+				"level": map[string]interface{}{
+					"value": pattern,
+					"flags": "ALL",
+				},
+			},
+		},
+		{
+			"regexp": map[string]interface{}{
+				"resourceId": map[string]interface{}{
+					"value": pattern,
+					"flags": "ALL",
+				},
+			},
+		},
+		{
+			"regexp": map[string]interface{}{
+				"traceId": map[string]interface{}{
+					"value": pattern,
+					"flags": "ALL",
+				},
+			},
+		},
+		{
+			"regexp": map[string]interface{}{
+				"spanId": map[string]interface{}{
+					"value": pattern,
+					"flags": "ALL",
+				},
+			},
+		},
+		{
+			"regexp": map[string]interface{}{
+				"commit": map[string]interface{}{
+					"value": pattern,
+					"flags": "ALL",
+				},
+			},
+		},
+		{
+			"regexp": map[string]interface{}{
+				"metadata.parentResourceId": map[string]interface{}{
+					"value": pattern,
+					"flags": "ALL",
+				},
+			},
+		},
+		{
+			"regexp": map[string]interface{}{
+				"metadata.environment": map[string]interface{}{
+					"value": pattern,
+					"flags": "ALL",
+				},
+			},
+		},
+		{
+			"regexp": map[string]interface{}{
+				"metadata.service": map[string]interface{}{
+					"value": pattern,
+					"flags": "ALL",
+				},
+			},
+		},
+		{
+			"regexp": map[string]interface{}{
+				"metadata.version": map[string]interface{}{
+					"value": pattern,
+					"flags": "ALL",
+				},
+			},
+		},
+		{
+			"regexp": map[string]interface{}{
+				"metadata.userId": map[string]interface{}{
+					"value": pattern,
+					"flags": "ALL",
+				},
+			},
+		},
+		{
+			"regexp": map[string]interface{}{
+				"metadata.requestId": map[string]interface{}{
+					"value": pattern,
+					"flags": "ALL",
+				},
+			},
+		},
+		{
+			"regexp": map[string]interface{}{
+				"metadata.errorCode": map[string]interface{}{
+					"value": pattern,
+					"flags": "ALL",
+				},
 			},
 		},
 	}
+
+	return map[string]interface{}{
+		"bool": map[string]interface{}{
+			"should": shouldClauses,
+		},
+	}
+}
+
+// DLQ Management Endpoints
+
+func (h *Handler) GetDLQCount(c *gin.Context) {
+	if h.dlqClient == nil {
+		c.JSON(http.StatusOK, gin.H{
+			"count":   0,
+			"message": "DLQ is disabled",
+		})
+		return
+	}
+
+	count, err := h.dlqClient.GetCount(c.Request.Context())
+	if err != nil {
+		logger.Error("Failed to get DLQ count: %v", err)
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"error": "Failed to get DLQ count",
+		})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"count": count,
+	})
+}
+
+func (h *Handler) GetDLQMessages(c *gin.Context) {
+	if h.dlqClient == nil {
+		c.JSON(http.StatusOK, gin.H{
+			"messages": []dlq.FailedMessage{},
+			"message":  "DLQ is disabled",
+		})
+		return
+	}
+
+	limitStr := c.DefaultQuery("limit", "10")
+	limit, err := strconv.Atoi(limitStr)
+	if err != nil || limit <= 0 || limit > 100 {
+		limit = 10
+	}
+
+	messages, err := h.dlqClient.GetMessages(c.Request.Context(), limit)
+	if err != nil {
+		logger.Error("Failed to get DLQ messages: %v", err)
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"error": "Failed to get DLQ messages",
+		})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"messages": messages,
+		"count":    len(messages),
+	})
+}
+
+func (h *Handler) ForceAddAllDLQMessages(c *gin.Context) {
+	userRole, exists := c.Get("user_role")
+	if !exists || userRole != auth.RoleAdmin {
+		c.JSON(http.StatusForbidden, gin.H{"error": "Admin access required"})
+		return
+	}
+
+	if h.dlqClient == nil {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error": "DLQ is disabled",
+		})
+		return
+	}
+
+	err := h.dlqClient.ForceAddAllMessages(c.Request.Context())
+	if err != nil {
+		logger.Error("Failed to force add all DLQ messages: %v", err)
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"error": "Failed to force add all messages",
+		})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"message": "All messages force added successfully",
+	})
+}
+
+func (h *Handler) ClearDLQ(c *gin.Context) {
+	userRole, exists := c.Get("user_role")
+	if !exists || userRole != auth.RoleAdmin {
+		c.JSON(http.StatusForbidden, gin.H{"error": "Admin access required"})
+		return
+	}
+
+	if h.dlqClient == nil {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error": "DLQ is disabled",
+		})
+		return
+	}
+
+	err := h.dlqClient.ClearAll(c.Request.Context())
+	if err != nil {
+		logger.Error("Failed to clear DLQ: %v", err)
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"error": "Failed to clear DLQ",
+		})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"message": "DLQ cleared successfully",
+	})
+}
+
+// Authentication Endpoints
+
+type LoginRequest struct {
+	Email    string `json:"email" binding:"required"`
+	Password string `json:"password" binding:"required"`
+}
+
+type LoginResponse struct {
+	Token string `json:"token"`
+	Role  string `json:"role"`
+	Email string `json:"email"`
+}
+
+func (h *Handler) Login(c *gin.Context) {
+	var req LoginRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error": "Invalid request format",
+		})
+		return
+	}
+
+	role, err := h.authService.AuthenticateUser(req.Email, req.Password, h.config)
+	if err != nil {
+		c.JSON(http.StatusUnauthorized, gin.H{
+			"error": "Invalid credentials",
+		})
+		return
+	}
+
+	token, err := h.authService.GenerateToken(req.Email, role)
+	if err != nil {
+		logger.Error("Failed to generate token: %v", err)
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"error": "Failed to generate token",
+		})
+		return
+	}
+
+	c.JSON(http.StatusOK, LoginResponse{
+		Token: token,
+		Role:  string(role),
+		Email: req.Email,
+	})
+}
+
+func (h *Handler) GetProfile(c *gin.Context) {
+	email, _ := c.Get("user_email")
+	role, _ := c.Get("user_role")
+
+	c.JSON(http.StatusOK, gin.H{
+		"email": email,
+		"role":  role,
+	})
 }

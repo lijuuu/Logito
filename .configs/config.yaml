@@ -1,0 +1,104 @@
+# Logito Configuration
+# ===================
+
+# Database Configuration
+# ---------------------
+database:
+  postgres:
+    host: "postgres"
+    port: 5432
+    user: "loguser"
+    password: "logpass"
+    dbname: "logs"
+    connectionPool:
+      maxOpenConns: 100
+      maxIdleConns: 20
+      connMaxLifetime: "10m"
+      connMaxIdleTime: "2m"
+
+dlq:
+  enabled: true
+  type: "mongodb"
+  connection:
+    uri: "mongodb://mongodb:27017"
+    database: "dlq"
+    collection: "failed_logs"
+  concurrency: 4
+  failureTypes:
+    parseError: true
+    dbFailure: true
+    validationError: true
+    elasticsearchError: true
+    timeoutError: true
+
+# Services Configuration
+# =====================
+
+# Log Ingestor Service
+# -------------------
+log-ingestor:
+  server:
+    host: "0.0.0.0"
+    port: 3000
+
+  processing:
+    batcher:
+      maxBatchSize: 1000
+      maxBatchCount: 2000
+      flushInterval: "100ms"
+    workers:
+      concurrency: 20
+      retryInterval: "300ms"
+      retryCount: 3
+
+  dlq:
+    failureTypes:
+      parseError: false
+      dbFailure: true
+      validationError: false
+      timeoutError: false
+
+# Query Interface Service
+# ----------------------
+query-interface:
+  server:
+    host: "0.0.0.0"
+    port: 4000
+
+  elasticsearch:
+    connection:
+      host: "http://elasticsearch:9200"
+      index: "logs"
+      timeout: "90s"
+      connectionPool:
+        maxConnsPerHost: 20
+        maxIdleConns: 50
+        idleConnTimeout: "90s"
+      healthCheck:
+        checkMinHealth: true
+        minHealthThreshold: 60.0
+        healthCheckTimeout: "5s"
+    indexer:
+      workers:
+        count: 8
+        batchSize: 3000
+        fetchInterval: "200ms"
+      retry:
+        maxRetries: 3
+        delay: "3s"
+        processingTimeout: "20s"
+
+  search:
+    allowedFields:
+      - level
+      - message
+      - resourceId
+      - timestamp
+      - traceId
+      - spanId
+      - commit
+      - metadata.parentResourceId
+
+  auth:
+    email: "admin@gmail.com"
+    password: "1234"

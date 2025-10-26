@@ -10,14 +10,19 @@ import {
 } from '../types';
 import { logger } from '../utils/logger';
 
-const API_BASE_URL = 'http://localhost:4000';
+const API_BASE_URL = process.env.NODE_ENV === 'production' ? '/api' : 'http://localhost:4000';
 
 class ApiService {
   private baseUrl: string;
+  private token: string | null = null;
 
   constructor(baseUrl: string = API_BASE_URL) {
     this.baseUrl = baseUrl;
     logger.info('API Service initialized', { baseUrl });
+  }
+
+  setToken(token: string | null) {
+    this.token = token;
   }
 
   private async request<T>(endpoint: string, options?: RequestInit): Promise<T> {
@@ -26,12 +31,18 @@ class ApiService {
 
     logger.logApiRequest(options?.method || 'GET', url, options?.body);
 
+    const headers: Record<string, string> = {
+      'Content-Type': 'application/json',
+      ...(options?.headers as Record<string, string>),
+    };
+
+    if (this.token) {
+      headers['Authorization'] = `Bearer ${this.token}`;
+    }
+
     try {
       const response = await fetch(url, {
-        headers: {
-          'Content-Type': 'application/json',
-          ...options?.headers,
-        },
+        headers,
         ...options,
       });
 
@@ -98,6 +109,13 @@ class ApiService {
   async forceRefresh(): Promise<{ message: string; processedCount: number; timestamp: number }> {
     logger.logUserAction('forceRefresh');
     return this.request<{ message: string; processedCount: number; timestamp: number }>('/force-refresh', {
+      method: 'POST',
+    });
+  }
+
+  async resetIndexingStatus(): Promise<{ message: string; timestamp: string }> {
+    logger.logUserAction('resetIndexingStatus');
+    return this.request<{ message: string; timestamp: string }>('/reset-indexing', {
       method: 'POST',
     });
   }

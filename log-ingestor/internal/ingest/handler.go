@@ -1,11 +1,14 @@
 package ingest
 
 import (
+	"encoding/json"
 	"net/http"
 	"time"
 
 	"github.com/gin-gonic/gin"
-	jsoniter "github.com/json-iterator/go"
+	"github.com/lijuuu/Logito/log-ingestor/internal/config"
+	"github.com/lijuuu/Logito/log-ingestor/internal/dlq"
+	"github.com/lijuuu/Logito/log-ingestor/internal/logger"
 	"github.com/lijuuu/Logito/log-ingestor/pkg/logentry"
 )
 
@@ -13,64 +16,82 @@ import (
 type Handler struct {
 	batcher *Batcher
 	pool    *ObjectPool
+	dlq     dlq.DLQ
+	config  *config.Config
 }
 
 // NewHandler creates a new log ingestion handler
-func NewHandler(batcher *Batcher, pool *ObjectPool) *Handler {
+func NewHandler(batcher *Batcher, pool *ObjectPool, dlq dlq.DLQ, cfg *config.Config) *Handler {
 	return &Handler{
 		batcher: batcher,
 		pool:    pool,
+		dlq:     dlq,
+		config:  cfg,
 	}
 }
 
-// IngestLogs handles POST /logs endpoint for single or bulk log ingestion
 func (h *Handler) IngestLogs(c *gin.Context) {
+	rawBody, _ := c.GetRawData()
+
 	var requestBody interface{}
 
-	// parse request body
-	if err := c.ShouldBindJSON(&requestBody); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{
-			"error": "invalid json format",
-		})
+	if err := json.Unmarshal(rawBody, &requestBody); err != nil {
+		logger.Error("Invalid JSON format in request: %v", err)
+
+		if h.dlq != nil {
+			dlq.SendToDLQIfEnabled(h.dlq, h.config, string(rawBody), "JSON parsing failed: "+err.Error(), dlq.FailureTypeParseError)
+		}
+
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid json format"})
 		return
 	}
 
-	// determine if it's a single log or array of logs
 	var logs []map[string]interface{}
 
 	switch v := requestBody.(type) {
 	case map[string]interface{}:
-		// single log entry
 		logs = []map[string]interface{}{v}
 	case []interface{}:
-		// array of log entries
 		for _, item := range v {
 			if logMap, ok := item.(map[string]interface{}); ok {
 				logs = append(logs, logMap)
 			} else {
-				c.JSON(http.StatusBadRequest, gin.H{
-					"error": "invalid log entry format in array",
-				})
+				logger.Error("Invalid log entry format in array")
+
+				// Send invalid log entry to DLQ
+				if h.dlq != nil {
+					dlq.SendToDLQIfEnabled(h.dlq, h.config, item, "Invalid log entry format in array", dlq.FailureTypeParseError)
+				}
+
+				c.JSON(http.StatusBadRequest, gin.H{"error": "invalid log entry format in array"})
 				return
 			}
 		}
 	default:
-		c.JSON(http.StatusBadRequest, gin.H{
-			"error": "request body must be a log object or array of logs",
-		})
+		logger.Error("Invalid request body type")
+
+		// Send invalid request body to DLQ
+		if h.dlq != nil {
+			dlq.SendToDLQIfEnabled(h.dlq, h.config, requestBody, "Invalid request body type", dlq.FailureTypeParseError)
+		}
+
+		c.JSON(http.StatusBadRequest, gin.H{"error": "request body must be a log object or array of logs"})
 		return
 	}
 
-	// limit batch size to prevent memory issues
-	const maxBatchSize = 1000
+	const maxBatchSize = 5000
 	if len(logs) > maxBatchSize {
-		c.JSON(http.StatusBadRequest, gin.H{
-			"error": "batch size too large, maximum 1000 logs per request",
-		})
+		logger.Error("Batch size too large: %d (max: %d)", len(logs), maxBatchSize)
+
+		// Send oversized batch to DLQ
+		if h.dlq != nil {
+			dlq.SendToDLQIfEnabled(h.dlq, h.config, logs, "Batch size too large", dlq.FailureTypeValidationError)
+		}
+
+		c.JSON(http.StatusBadRequest, gin.H{"error": "batch size too large, maximum 5000 logs per request"})
 		return
 	}
 
-	// get slice from pool for better memory management
 	validLogs := h.pool.GetLogEntrySlice()
 	defer h.pool.PutLogEntrySlice(validLogs)
 
@@ -79,20 +100,21 @@ func (h *Handler) IngestLogs(c *gin.Context) {
 	for _, logData := range logs {
 		entry, err := h.parseLogEntry(logData)
 		if err != nil {
-			//pass the invalid logs to DLQ
 			invalidLogs = append(invalidLogs, logData)
+
+			// Send invalid log to DLQ
+			if h.dlq != nil {
+				dlq.SendToDLQIfEnabled(h.dlq, h.config, logData, "Log parsing validation failed: "+err.Error(), dlq.FailureTypeValidationError)
+			}
 			continue
 		}
-
 		validLogs = append(validLogs, entry)
 	}
 
-	// add valid logs to batcher
 	if len(validLogs) > 0 {
 		h.batcher.AddLogs(validLogs)
 	}
 
-	// return response
 	response := gin.H{
 		"message":   "logs processed",
 		"total":     len(logs),
@@ -108,38 +130,48 @@ func (h *Handler) IngestLogs(c *gin.Context) {
 	c.JSON(http.StatusOK, response)
 }
 
-// parseLogEntry parses a log entry from map and validates it
+// Direct field mapping to avoid JSON marshaling/unmarshaling overhead
 func (h *Handler) parseLogEntry(logData map[string]interface{}) (*logentry.LogEntry, error) {
-	// get entry from pool for reuse
 	entry := h.pool.GetLogEntry()
 
-	// use json-iterator for high-performance marshaling/unmarshaling
-	jsonBytes, err := jsoniter.Marshal(logData)
-	if err != nil {
-		h.pool.PutLogEntry(entry) // return to pool on error
-		return nil, err
+	if level, ok := logData["level"].(string); ok {
+		entry.Level = level
+	}
+	if message, ok := logData["message"].(string); ok {
+		entry.Message = message
+	}
+	if resourceID, ok := logData["resourceId"].(string); ok {
+		entry.ResourceID = resourceID
+	}
+	if timestamp, ok := logData["timestamp"].(string); ok {
+		if t, err := time.Parse(time.RFC3339, timestamp); err == nil {
+			entry.Timestamp = t
+		}
+	}
+	if traceID, ok := logData["traceId"].(string); ok {
+		entry.TraceID = &traceID
+	}
+	if spanID, ok := logData["spanId"].(string); ok {
+		entry.SpanID = &spanID
+	}
+	if commit, ok := logData["commit"].(string); ok {
+		entry.Commit = &commit
+	}
+	if metadata, ok := logData["metadata"].(map[string]interface{}); ok {
+		entry.Metadata = metadata
 	}
 
-	// use json-iterator for high-performance unmarshaling
-	if err := jsoniter.Unmarshal(jsonBytes, entry); err != nil {
-		h.pool.PutLogEntry(entry) // return to pool on error
-		return nil, err
-	}
-
-	// validate required fields
 	if err := entry.Validate(); err != nil {
-		h.pool.PutLogEntry(entry) // return to pool on error
+		h.pool.PutLogEntry(entry)
 		return nil, err
 	}
 
-	// set initial processing state
-	entry.ProcessingAt = nil // start as unprocessed, so that indexer can pick it
+	entry.ProcessingAt = nil
 	entry.Indexed = false
 
 	return entry, nil
 }
 
-// HealthCheck handles health check endpoint
 func (h *Handler) HealthCheck(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{
 		"status":    "healthy",
@@ -148,21 +180,11 @@ func (h *Handler) HealthCheck(c *gin.Context) {
 	})
 }
 
-// GetQuickStats returns basic stats without heavy locking
 func (h *Handler) GetQuickStats(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{
 		"status":    "running",
 		"timestamp": time.Now().UTC(),
 		"service":   "log-ingestor",
 		"note":      "use /stats for detailed metrics",
-	})
-}
-
-// GetStats returns current batcher statistics
-func (h *Handler) GetStats(c *gin.Context) {
-	stats := h.batcher.GetStats()
-	c.JSON(http.StatusOK, gin.H{
-		"batcher":   stats,
-		"timestamp": time.Now().UTC(),
 	})
 }

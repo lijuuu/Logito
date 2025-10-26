@@ -11,6 +11,7 @@ A log management system built with Go and React, featuring high-performance log 
 - **Frontend**: Modern React-based web interface
 - **PostgreSQL**: Primary database for log storage
 - **Elasticsearch**: Search and indexing engine
+- **MongoDB**: Optional Dead Letter Queue (DLQ) for failed log processing
 
 ## Performance
 
@@ -46,6 +47,7 @@ open http://localhost:3030
 - **[Installation Guide](docs/installation.md)** - Setup and deployment instructions
 - **[Configuration Guide](docs/configuration.md)** - System configuration and tuning
 - **[Services Overview](docs/services.md)** - Architecture and service details
+- **[DLQ Configuration](docs/dlq-configuration.md)** - Dead Letter Queue setup and usage
 
 ## Default Specifications
 

@@ -2,14 +2,17 @@ package worker
 
 import (
 	"context"
+	"fmt"
 	"sync"
 	"time"
 
+	"github.com/lijuuu/Logito/log-ingestor/internal/config"
+	"github.com/lijuuu/Logito/log-ingestor/internal/dlq"
+	"github.com/lijuuu/Logito/log-ingestor/internal/logger"
 	"github.com/lijuuu/Logito/log-ingestor/internal/storage/postgres"
 	"github.com/lijuuu/Logito/log-ingestor/pkg/logentry"
 )
 
-// Worker handles async processing of log batches
 type Worker struct {
 	dbClient    *postgres.Client
 	concurrency int
@@ -17,34 +20,34 @@ type Worker struct {
 	retryDelay  time.Duration
 	stopChan    chan struct{}
 	wg          sync.WaitGroup
+	dlq         dlq.DLQ
+	config      *config.Config
 }
 
-// NewWorker creates a new worker instance
-func NewWorker(dbClient *postgres.Client, concurrency int, retryCount int, retryDelay time.Duration) *Worker {
+func NewWorker(dbClient *postgres.Client, concurrency int, retryCount int, retryDelay time.Duration, dlq dlq.DLQ, cfg *config.Config) *Worker {
 	return &Worker{
 		dbClient:    dbClient,
 		concurrency: concurrency,
 		retryCount:  retryCount,
 		retryDelay:  retryDelay,
 		stopChan:    make(chan struct{}),
+		dlq:         dlq,
+		config:      cfg,
 	}
 }
 
-// Start starts multiple workers with specified concurrency
 func (w *Worker) Start(batchChan <-chan *logentry.Batch) {
 	for i := 0; i < w.concurrency; i++ {
 		w.wg.Add(1)
-		go w.workerLoop(batchChan, i) // pass worker id for logging
+		go w.workerLoop(batchChan, i)
 	}
 }
 
-// Stop stops the worker gracefully
 func (w *Worker) Stop() {
 	close(w.stopChan)
 	w.wg.Wait()
 }
 
-// workerLoop is the main worker loop for concurrent batch processing
 func (w *Worker) workerLoop(batchChan <-chan *logentry.Batch, workerID int) {
 	defer w.wg.Done()
 
@@ -54,7 +57,6 @@ func (w *Worker) workerLoop(batchChan <-chan *logentry.Batch, workerID int) {
 			if batch == nil {
 				return
 			}
-			// process batch concurrently with other workers
 			w.processBatch(batch, workerID)
 		case <-w.stopChan:
 			return
@@ -62,41 +64,51 @@ func (w *Worker) workerLoop(batchChan <-chan *logentry.Batch, workerID int) {
 	}
 }
 
-// processBatch processes a batch of log entries with worker id for logging
 func (w *Worker) processBatch(batch *logentry.Batch, workerID int) {
-	defer func() {
-		// always return batch to pool after processing
-		// note: this assumes the batch is managed by a pool
-		// in a real implementation, you'd need access to the pool
-	}()
-
 	if batch.IsEmpty() {
 		return
 	}
 
+	batchSize := len(batch.Entries)
+	logger.Worker(workerID, batchSize, "Processing batch")
+
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	// attempt to insert batch with retries
 	for attempt := 0; attempt <= w.retryCount; attempt++ {
 		err := w.dbClient.InsertBatch(ctx, batch.Entries)
 		if err == nil {
-			// success, we're done
+			logger.Worker(workerID, batchSize, "Batch processed successfully")
 			return
 		}
 
-		// if this is the last attempt, send to dlq
 		if attempt == w.retryCount {
-			//send to DLQ
+			logger.Error("Worker-%d failed to process batch after %d attempts: %v", workerID, w.retryCount+1, err)
+
+			// Send failed batch to DLQ
+			if w.dlq != nil {
+				dlqCount := 0
+				for _, entry := range batch.Entries {
+					reason := fmt.Sprintf("Database insert failed after %d retries: %v", w.retryCount+1, err)
+					if dlqErr := dlq.SendToDLQIfEnabled(w.dlq, w.config, entry, reason, dlq.FailureTypeDBFailure); dlqErr != nil {
+						logger.Error("Failed to send entry to DLQ: %v", dlqErr)
+					} else {
+						dlqCount++
+					}
+				}
+				logger.Worker(workerID, batchSize, "Sent %d/%d failed entries to DLQ", dlqCount, len(batch.Entries))
+			} else {
+				logger.Error("DLQ not available, batch of %d entries lost", len(batch.Entries))
+			}
 			return
 		}
 
-		// wait before retry with exponential backoff
+		logger.Worker(workerID, batchSize, "Retry attempt %d/%d", attempt+1, w.retryCount+1)
+		// Exponential backoff to avoid overwhelming the database
 		time.Sleep(w.retryDelay * time.Duration(attempt+1))
 	}
 }
 
-// HealthCheck checks if the worker is healthy
 func (w *Worker) HealthCheck(ctx context.Context) error {
 	return w.dbClient.HealthCheck(ctx)
 }

@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"log"
 	"net/http"
 	_ "net/http/pprof"
@@ -11,7 +12,9 @@ import (
 	"time"
 
 	"github.com/lijuuu/Logito/log-ingestor/internal/config"
+	"github.com/lijuuu/Logito/log-ingestor/internal/dlq"
 	"github.com/lijuuu/Logito/log-ingestor/internal/ingest"
+	"github.com/lijuuu/Logito/log-ingestor/internal/logger"
 	"github.com/lijuuu/Logito/log-ingestor/internal/migration"
 	"github.com/lijuuu/Logito/log-ingestor/internal/storage/postgres"
 	"github.com/lijuuu/Logito/log-ingestor/internal/worker"
@@ -22,138 +25,126 @@ import (
 )
 
 func main() {
-	// load environment variables (commented out)
-	// if err := godotenv.Load(); err != nil {
-	// 	log.Printf("warning: failed to load .env file: %v", err)
-	// }
-
-	// load configuration
 	cfg, err := loadConfig()
 	if err != nil {
 		log.Fatalf("failed to load config: %v", err)
 	}
+	logger.Init("Configuration loaded successfully")
 
-	// initialize database client
 	dbClient, err := postgres.NewClient(postgres.Config{
-		Host:            cfg.Postgres.Host,
-		Port:            cfg.Postgres.Port,
-		User:            cfg.Postgres.User,
-		Password:        cfg.Postgres.Password,
-		DBName:          cfg.Postgres.DBName,
-		MaxOpenConns:    cfg.Postgres.MaxOpenConns,
-		MaxIdleConns:    cfg.Postgres.MaxIdleConns,
-		ConnMaxLifetime: cfg.Postgres.ConnMaxLifetime,
+		Host:            cfg.Database.Postgres.Host,
+		Port:            cfg.Database.Postgres.Port,
+		User:            cfg.Database.Postgres.User,
+		Password:        cfg.Database.Postgres.Password,
+		DBName:          cfg.Database.Postgres.DBName,
+		MaxOpenConns:    cfg.Database.Postgres.ConnectionPool.MaxOpenConns,
+		MaxIdleConns:    cfg.Database.Postgres.ConnectionPool.MaxIdleConns,
+		ConnMaxLifetime: cfg.Database.Postgres.ConnectionPool.ConnMaxLifetime,
+		ConnMaxIdleTime: cfg.Database.Postgres.ConnectionPool.ConnMaxIdleTime,
 	})
 	if err != nil {
 		log.Fatalf("failed to create database client: %v", err)
 	}
 	defer dbClient.Close()
+	logger.Database("Connected to PostgreSQL at %s:%d", cfg.Database.Postgres.Host, cfg.Database.Postgres.Port)
 
-	// run database migrations
 	if err := migration.Migrate(dbClient.GetPool()); err != nil {
 		log.Fatalf("failed to run database migrations: %v", err)
 	}
-	log.Println("database migrations completed successfully")
+	logger.Database("Migrations completed successfully")
 
+	dlqClient := dlq.NewDLQ(cfg)
+	if dlqClient != nil {
+		logger.Init("DLQ initialized successfully")
+	} else {
+		logger.Init("DLQ disabled")
+	}
 
-	// initialize object pool for memory reuse
-	pool := ingest.NewObjectPool(cfg.Batcher.MaxBatchCount)
+	pool := ingest.NewObjectPool(cfg.LogIngestor.Processing.Batcher.MaxBatchCount)
+	logger.Init("Object pool initialized with capacity: %d", cfg.LogIngestor.Processing.Batcher.MaxBatchCount)
 
-	// initialize batcher
 	batcher := ingest.NewBatcher(
-		cfg.Batcher.MaxBatchSize,
-		cfg.Batcher.MaxBatchCount,
-		cfg.Batcher.FlushInterval,
+		cfg.LogIngestor.Processing.Batcher.MaxBatchSize,
+		cfg.LogIngestor.Processing.Batcher.MaxBatchCount,
+		cfg.LogIngestor.Processing.Batcher.FlushInterval,
 		pool,
+		dlqClient,
+		cfg,
 	)
+	logger.Init("Batcher initialized - MaxBatchSize: %d, MaxBatchCount: %d, FlushInterval: %v",
+		cfg.LogIngestor.Processing.Batcher.MaxBatchSize, cfg.LogIngestor.Processing.Batcher.MaxBatchCount, cfg.LogIngestor.Processing.Batcher.FlushInterval)
 
-	// initialize worker
 	worker := worker.NewWorker(
 		dbClient,
-		cfg.Worker.Concurrency,
-		3, // retry count
-		cfg.Worker.RetryInterval,
+		cfg.LogIngestor.Processing.Workers.Concurrency,
+		cfg.LogIngestor.Processing.Workers.RetryCount,
+		cfg.LogIngestor.Processing.Workers.RetryInterval,
+		dlqClient,
+		cfg,
 	)
+	logger.Init("Worker initialized with concurrency: %d", cfg.LogIngestor.Processing.Workers.Concurrency)
 
-	// start worker
 	worker.Start(batcher.GetWorkerChan())
 
-	// initialize http handler
-	handler := ingest.NewHandler(batcher, pool)
+	handler := ingest.NewHandler(batcher, pool, dlqClient, cfg)
 
-	// setup gin router
 	router := gin.Default()
 
-	// add middleware
 	router.Use(gin.Recovery())
 	router.Use(gin.Logger())
 
-	// setup routes
 	router.POST("/logs", handler.IngestLogs)
 	router.GET("/health", handler.HealthCheck)
 	router.GET("/quick-stats", handler.GetQuickStats)
-	router.GET("/stats", handler.GetStats)
 
-	// create http server
 	srv := &http.Server{
-		Addr:    ":3000",
+		Addr:    fmt.Sprintf(":%d", cfg.LogIngestor.Server.Port),
 		Handler: router,
 	}
 
-	// start server in goroutine
 	go func() {
-		log.Printf("starting server on %s", srv.Addr)
+		logger.Init("Starting HTTP server on %s", srv.Addr)
 		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			logger.Error("Failed to start server: %v", err)
 			log.Fatalf("failed to start server: %v", err)
 		}
 	}()
 
-	// start profiling server
 	go func() {
-		log.Println("profiling server started on :6060")
+		logger.Init("Profiling server started on :6060")
 		log.Println(http.ListenAndServe("0.0.0.0:6060", nil))
 	}()
 
-	// wait for interrupt signal
 	quit := make(chan os.Signal, 1)
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
 	<-quit
 
-	log.Println("shutting down server...")
+	logger.Init("Shutting down server...")
 
-	// graceful shutdown
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	// stop batcher
 	batcher.Stop()
-
-	// stop worker
 	worker.Stop()
 
-	// shutdown http server
 	if err := srv.Shutdown(ctx); err != nil {
-		log.Printf("server forced to shutdown: %v", err)
+		logger.Error("Server forced to shutdown: %v", err)
 	}
 
-	log.Println("server exited")
+	logger.Init("Server exited")
 }
 
-// loadConfig loads configuration from yaml file
 func loadConfig() (*config.Config, error) {
-	// determine config file based on environment
-	configFile := "configs/local.yml"
+	configFile := "./config.yaml"
 	if env := os.Getenv("ENV"); env == "prod" {
-		configFile = "configs/prod.yml"
+		configFile = "./config.prod.yaml"
 	}
 
-	// read config file
 	data, err := os.ReadFile(configFile)
 	if err != nil {
 		return nil, err
 	}
 
-	// parse yaml
 	var cfg config.Config
 	if err := yaml.Unmarshal(data, &cfg); err != nil {
 		return nil, err

@@ -11,7 +11,7 @@
 - Worker pool for parallel processing
 - Health monitoring endpoint
 
-**Configuration**: `log-ingestor/configs/local.yml`
+**Configuration**: `.configs/config.yaml` (log-ingestor section)
 
 ### 2. Query Interface
 **Port**: 4000  
@@ -23,7 +23,7 @@
 - Database querying
 - Real-time indexing status
 
-**Configuration**: `query-interface/configs/local.yml`
+**Configuration**: `.configs/config.yaml` (query-interface section)
 
 ### 3. Frontend
 **Port**: 3030  

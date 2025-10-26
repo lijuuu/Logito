@@ -1,11 +1,11 @@
 #!/bin/bash
 
-# Script to clear all logs from PostgreSQL and Elasticsearch
-# This will remove all data from both databases
+# Script to clear all logs from PostgreSQL, Elasticsearch, and MongoDB DLQ
+# This will remove all data from all databases
 
 set -e
 
-echo "🗑️  Clearing all logs from PostgreSQL and Elasticsearch..."
+echo "🗑️  Clearing all logs from PostgreSQL, Elasticsearch, and MongoDB DLQ..."
 
 # Colors for output
 RED='\033[0;31m'
@@ -45,7 +45,12 @@ if ! docker-compose ps | grep -q "logito-elasticsearch-1.*Up"; then
     exit 1
 fi
 
-print_warning "This will permanently delete ALL logs from both PostgreSQL and Elasticsearch!"
+if ! docker-compose ps | grep -q "logito-mongodb-1.*Up"; then
+    print_error "MongoDB container is not running. Please start the services first with: docker-compose up -d"
+    exit 1
+fi
+
+print_warning "This will permanently delete ALL logs from PostgreSQL, Elasticsearch, and MongoDB DLQ!"
 echo -n "Are you sure you want to continue? (yes/no): "
 read -r confirmation
 
@@ -92,7 +97,22 @@ else
     exit 1
 fi
 
-# 3. Verify cleanup
+# 3. Clear MongoDB DLQ
+print_status "Clearing MongoDB DLQ logs..."
+docker-compose exec -T mongodb mongosh --eval "
+    use dlq;
+    db.failed_logs.deleteMany({});
+    print('DLQ collection cleared');
+"
+
+if [ $? -eq 0 ]; then
+    print_status "✅ MongoDB DLQ logs cleared successfully"
+else
+    print_error "❌ Failed to clear MongoDB DLQ logs"
+    exit 1
+fi
+
+# 4. Verify cleanup
 print_status "Verifying cleanup..."
 
 # Check PostgreSQL
@@ -103,8 +123,12 @@ print_status "PostgreSQL logs count: $PG_COUNT"
 ES_COUNT=$(docker-compose exec -T elasticsearch curl -s "localhost:9200/logs/_count" | grep -o '"count":[0-9]*' | cut -d':' -f2)
 print_status "Elasticsearch logs count: $ES_COUNT"
 
-if [ "$PG_COUNT" = "0" ] && [ "$ES_COUNT" = "0" ]; then
-    print_status "🎉 All logs have been successfully cleared from both databases!"
+# Check MongoDB DLQ
+MONGO_COUNT=$(docker-compose exec -T mongodb mongosh --quiet --eval "db = db.getSiblingDB('dlq'); db.failed_logs.countDocuments({})")
+print_status "MongoDB DLQ logs count: $MONGO_COUNT"
+
+if [ "$PG_COUNT" = "0" ] && [ "$ES_COUNT" = "0" ] && [ "$MONGO_COUNT" = "0" ]; then
+    print_status "🎉 All logs have been successfully cleared from all databases!"
     print_status "The system is now clean and ready for new logs."
 else
     print_warning "⚠️  Some logs may still remain. Please check manually."

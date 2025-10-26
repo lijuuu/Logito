@@ -4,7 +4,6 @@ import (
 	"time"
 )
 
-// Log represents the database model for logs table
 type Log struct {
 	ID           int64                  `db:"id"`
 	Level        string                 `db:"level"`
@@ -19,7 +18,6 @@ type Log struct {
 	ProcessingAt *time.Time             `db:"processingAt"`
 }
 
-// Config represents database configuration
 type Config struct {
 	Host            string
 	Port            int
@@ -29,4 +27,5 @@ type Config struct {
 	MaxOpenConns    int
 	MaxIdleConns    int
 	ConnMaxLifetime time.Duration
+	ConnMaxIdleTime time.Duration
 }
