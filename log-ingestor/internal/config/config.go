@@ -4,52 +4,89 @@ import (
 	"time"
 )
 
-//Config represents the application configuration
 type Config struct {
-	Server        ServerConfig        `yaml:"server"`
-	Postgres      PostgresConfig      `yaml:"postgres"`
-	Elasticsearch ElasticsearchConfig `yaml:"elasticsearch"`
-	Batcher       BatcherConfig       `yaml:"batcher"`
-	Worker        WorkerConfig        `yaml:"worker"`
+	Database    DatabaseConfig    `yaml:"database"`
+	DLQ         DLQConfig         `yaml:"dlq"`
+	LogIngestor LogIngestorConfig `yaml:"log-ingestor"`
 }
 
-//ServerConfig represents server configuration
+type DatabaseConfig struct {
+	Postgres PostgresConfig `yaml:"postgres"`
+}
+
+type PostgresConfig struct {
+	Host           string               `yaml:"host"`
+	Port           int                  `yaml:"port"`
+	User           string               `yaml:"user"`
+	Password       string               `yaml:"password"`
+	DBName         string               `yaml:"dbname"`
+	ConnectionPool ConnectionPoolConfig `yaml:"connectionPool"`
+}
+
+type ConnectionPoolConfig struct {
+	MaxOpenConns    int           `yaml:"maxOpenConns"`
+	MaxIdleConns    int           `yaml:"maxIdleConns"`
+	ConnMaxLifetime time.Duration `yaml:"connMaxLifetime"`
+	ConnMaxIdleTime time.Duration `yaml:"connMaxIdleTime"`
+}
+
+type DLQConfig struct {
+	Enabled      bool                `yaml:"enabled"`
+	Type         string              `yaml:"type"`
+	Connection   DLQConnectionConfig `yaml:"connection"`
+	Concurrency  int                 `yaml:"concurrency"`
+	FailureTypes FailureTypesConfig  `yaml:"failureTypes"`
+}
+
+type DLQConnectionConfig struct {
+	URI        string `yaml:"uri"`
+	Database   string `yaml:"database"`
+	Collection string `yaml:"collection"`
+}
+
+type FailureTypesConfig struct {
+	ParseError         bool `yaml:"parseError"`
+	DBFailure          bool `yaml:"dbFailure"`
+	ValidationError    bool `yaml:"validationError"`
+	ElasticsearchError bool `yaml:"elasticsearchError"`
+	TimeoutError       bool `yaml:"timeoutError"`
+}
+
+type LogIngestorConfig struct {
+	Server     ServerConfig         `yaml:"server"`
+	Processing ProcessingConfig     `yaml:"processing"`
+	DLQ        LogIngestorDLQConfig `yaml:"dlq"`
+}
+
 type ServerConfig struct {
 	Host string `yaml:"host"`
 	Port int    `yaml:"port"`
 }
 
-//PostgresConfig represents postgres database configuration
-type PostgresConfig struct {
-	Host            string        `yaml:"host"`
-	Port            int           `yaml:"port"`
-	User            string        `yaml:"user"`
-	Password        string        `yaml:"password"`
-	DBName          string        `yaml:"dbname"`
-	MaxOpenConns    int           `yaml:"maxOpenConns"`
-	MaxIdleConns    int           `yaml:"maxIdleConns"`
-	ConnMaxLifetime time.Duration `yaml:"connMaxLifetime"`
+type ProcessingConfig struct {
+	Batcher BatcherConfig `yaml:"batcher"`
+	Workers WorkersConfig `yaml:"workers"`
 }
 
-//ElasticsearchConfig represents elasticsearch configuration
-type ElasticsearchConfig struct {
-	Host       string        `yaml:"host"`
-	Index      string        `yaml:"index"`
-	BatchSize  int           `yaml:"batchSize"`
-	RetryCount int           `yaml:"retryCount"`
-	Timeout    time.Duration `yaml:"timeout"`
-}
-
-//BatcherConfig represents batcher configuration
 type BatcherConfig struct {
 	MaxBatchSize  int           `yaml:"maxBatchSize"`
 	MaxBatchCount int           `yaml:"maxBatchCount"`
 	FlushInterval time.Duration `yaml:"flushInterval"`
 }
 
-//WorkerConfig represents worker configuration
-type WorkerConfig struct {
+type WorkersConfig struct {
 	Concurrency   int           `yaml:"concurrency"`
 	RetryInterval time.Duration `yaml:"retryInterval"`
-	WorkerSize    int           `yaml:"workerSize"`
+	RetryCount    int           `yaml:"retryCount"`
+}
+
+type LogIngestorDLQConfig struct {
+	FailureTypes LogIngestorFailureTypesConfig `yaml:"failureTypes"`
+}
+
+type LogIngestorFailureTypesConfig struct {
+	ParseError      bool `yaml:"parseError"`
+	DBFailure       bool `yaml:"dbFailure"`
+	ValidationError bool `yaml:"validationError"`
+	TimeoutError    bool `yaml:"timeoutError"`
 }

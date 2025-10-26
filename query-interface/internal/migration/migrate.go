@@ -21,7 +21,7 @@ func Migrate(ctx context.Context, client *elasticsearch.Client, indexName string
 	}
 
 	if exists {
-		return nil // already exists
+		return nil
 	}
 
 	err = createIndex(ctx, client, indexName, mappingJSON)
@@ -73,12 +73,12 @@ func MigrateWithSettings(ctx context.Context, client *elasticsearch.Client, inde
 	}
 
 	if exists {
-		return nil // already exists
+		return nil
 	}
 
 	mapping := mappingJSON
 	if customMapping != "" {
-		mapping = customMapping // use custom mapping
+		mapping = customMapping
 	}
 
 	err = createIndex(ctx, client, indexName, mapping)

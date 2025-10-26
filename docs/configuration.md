@@ -52,29 +52,31 @@ max_connections = 200             # Increase connection limit
 
 ### 3. Tune Service Configurations
 
-#### Log Ingestor (`log-ingestor/configs/local.yml`)
+#### Log Ingestor (`.configs/config.yaml` - log-ingestor section)
 ```yaml
-postgres:
-  maxOpenConns: 200    # Increase for more connections
-  maxIdleConns: 50     # Increase for connection reuse
+log-ingestor:
+  postgres:
+    maxOpenConns: 200    # Increase for more connections
+    maxIdleConns: 50     # Increase for connection reuse
 
-batcher:
-  maxBatchSize: 4000   # Increase for higher throughput
-  maxBatchCount: 1000  # Increase queue size
+  batcher:
+    maxBatchSize: 4000   # Increase for higher throughput
+    maxBatchCount: 1000  # Increase queue size
 
-worker:
-  concurrency: 40      # Increase worker threads
+  worker:
+    concurrency: 40      # Increase worker threads
 ```
 
-#### Query Interface (`query-interface/configs/local.yml`)
+#### Query Interface (`.configs/config.yaml` - query-interface section)
 ```yaml
-postgres:
-  maxOpenConns: 50     # Increase for more connections
-  maxIdleConns: 20     # Increase for connection reuse
+query-interface:
+  postgres:
+    maxOpenConns: 50     # Increase for more connections
+    maxIdleConns: 20     # Increase for connection reuse
 
-indexer:
-  workerCount: 24      # Increase indexing workers
-  batchSize: 4000      # Increase batch size
+  indexer:
+    workerCount: 24      # Increase indexing workers
+    batchSize: 4000      # Increase batch size
 ```
 
 ## Performance Tuning Guidelines

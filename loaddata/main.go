@@ -18,7 +18,6 @@ import (
 	"github.com/fatih/color"
 )
 
-// Color instances for consistent styling
 var (
 	headerColor    = color.New(color.FgCyan, color.Bold)
 	successColor   = color.New(color.FgGreen, color.Bold)
@@ -31,7 +30,6 @@ var (
 	separatorColor = color.New(color.FgBlue)
 )
 
-// Table formatting functions
 func printTableHeader(title string) {
 	headerColor.Printf("\n%s\n", title)
 	separatorColor.Println(strings.Repeat("═", len(title)))
@@ -52,7 +50,6 @@ func printProgressBar(current, total int, width int) string {
 	return fmt.Sprintf("[%s] %.1f%%", bar, percentage*100)
 }
 
-// LoadTestConfig represents configuration for a load test scenario
 type LoadTestConfig struct {
 	Name           string        `json:"name"`
 	BaseURL        string        `json:"base_url"`
@@ -62,12 +59,12 @@ type LoadTestConfig struct {
 	RequestTimeout time.Duration `json:"request_timeout"`
 }
 
-// LoadTestMetrics holds performance metrics for a load test
 type LoadTestMetrics struct {
 	TotalRequests   int64           `json:"total_requests"`
 	TotalLogs       int64           `json:"total_logs"`
 	SuccessfulReqs  int64           `json:"successful_requests"`
-	FailedReqs      int64           `json:"failed_requests"`
+	TimeoutReqs     int64           `json:"timeout_requests"`
+	ActualMissReqs  int64           `json:"actual_miss_requests"`
 	TotalDuration   time.Duration   `json:"total_duration"`
 	AvgResponseTime time.Duration   `json:"avg_response_time"`
 	MinResponseTime time.Duration   `json:"min_response_time"`
@@ -78,11 +75,12 @@ type LoadTestMetrics struct {
 	P99ResponseTime time.Duration   `json:"p99_response_time"`
 	RequestsPerSec  float64         `json:"requests_per_second"`
 	LogsPerSec      float64         `json:"logs_per_second"`
-	ErrorRate       float64         `json:"error_rate"`
-	ResponseTimes   []time.Duration `json:"-"` // Internal tracking for percentiles
+	TimeoutRate     float64         `json:"timeout_rate"`
+	ActualMissRate  float64         `json:"actual_miss_rate"`
+	SLAMissRate     float64         `json:"sla_miss_rate"`
+	ResponseTimes   []time.Duration `json:"-"`
 }
 
-// MockLogEntry represents a mock log entry for testing
 type MockLogEntry struct {
 	Level      string                 `json:"level"`
 	Message    string                 `json:"message"`
@@ -94,7 +92,6 @@ type MockLogEntry struct {
 	Metadata   map[string]interface{} `json:"metadata"`
 }
 
-// LoadTester handles load testing operations
 type LoadTester struct {
 	config        LoadTestConfig
 	metrics       LoadTestMetrics
@@ -105,7 +102,6 @@ type LoadTester struct {
 	progressChan  chan int
 }
 
-// NewLoadTester creates a new load tester instance
 func NewLoadTester(config LoadTestConfig) *LoadTester {
 	return &LoadTester{
 		config:        config,
@@ -115,16 +111,15 @@ func NewLoadTester(config LoadTestConfig) *LoadTester {
 	}
 }
 
-// generateMockLogEntry creates a realistic mock log entry
 func (lt *LoadTester) generateMockLogEntry() MockLogEntry {
 	levels := []string{"INFO", "WARN", "ERROR", "DEBUG", "FATAL"}
 	services := []string{"auth-service", "user-service", "payment-service", "notification-service", "api-gateway"}
 
 	return MockLogEntry{
 		Level:      levels[rand.Intn(len(levels))],
-		Message:    gofakeit.Sentence(rand.Intn(10) + 5), //generate 5-15 word sentence
+		Message:    gofakeit.Sentence(rand.Intn(10) + 5),
 		ResourceID: fmt.Sprintf("%s-%d", services[rand.Intn(len(services))], rand.Intn(1000)),
-		Timestamp:  time.Now().Add(-time.Duration(rand.Intn(3600)) * time.Second), //random timestamp within last hour
+		Timestamp:  time.Now().Add(-time.Duration(rand.Intn(3600)) * time.Second),
 		TraceID:    gofakeit.UUID(),
 		SpanID:     gofakeit.UUID()[:16],
 		Commit:     gofakeit.UUID(),
@@ -139,7 +134,6 @@ func (lt *LoadTester) generateMockLogEntry() MockLogEntry {
 	}
 }
 
-// generateBatchLogs creates a batch of mock log entries
 func (lt *LoadTester) generateBatchLogs(batchSize int) []MockLogEntry {
 	logs := make([]MockLogEntry, batchSize)
 	for i := 0; i < batchSize; i++ {
@@ -148,27 +142,22 @@ func (lt *LoadTester) generateBatchLogs(batchSize int) []MockLogEntry {
 	return logs
 }
 
-// calculatePercentiles calculates response time percentiles
 func (lt *LoadTester) calculatePercentiles() {
 	if len(lt.responseTimes) == 0 {
 		return
 	}
 
-	// Sort response times for percentile calculation
 	sortedTimes := make([]time.Duration, len(lt.responseTimes))
 	copy(sortedTimes, lt.responseTimes)
 	sort.Slice(sortedTimes, func(i, j int) bool {
 		return sortedTimes[i] < sortedTimes[j]
 	})
-
-	// Calculate percentiles
 	lt.metrics.P50ResponseTime = sortedTimes[int(float64(len(sortedTimes))*0.50)]
 	lt.metrics.P90ResponseTime = sortedTimes[int(float64(len(sortedTimes))*0.90)]
 	lt.metrics.P95ResponseTime = sortedTimes[int(float64(len(sortedTimes))*0.95)]
 	lt.metrics.P99ResponseTime = sortedTimes[int(float64(len(sortedTimes))*0.99)]
 }
 
-// calculateAverageResponseTime calculates the proper average response time
 func (lt *LoadTester) calculateAverageResponseTime() {
 	if len(lt.responseTimes) == 0 {
 		return
@@ -181,92 +170,125 @@ func (lt *LoadTester) calculateAverageResponseTime() {
 	lt.metrics.AvgResponseTime = total / time.Duration(len(lt.responseTimes))
 }
 
-// sendRequest sends a single request to the log ingestor
-func (lt *LoadTester) sendRequest(logs []MockLogEntry) (time.Duration, error) {
+type RequestResult struct {
+	Duration     time.Duration
+	Error        error
+	IsTimeout    bool
+	IsActualMiss bool
+}
+
+func (lt *LoadTester) sendRequest(logs []MockLogEntry) RequestResult {
 	start := time.Now()
 
 	var body interface{}
 	if len(logs) == 1 {
-		body = logs[0] //single log entry
+		body = logs[0]
 	} else {
-		body = logs //batch of log entries
+		body = logs
 	}
 
 	jsonData, err := json.Marshal(body)
 	if err != nil {
-		return 0, fmt.Errorf("failed to marshal json: %w", err)
+		return RequestResult{
+			Duration:     0,
+			Error:        fmt.Errorf("failed to marshal json: %w", err),
+			IsTimeout:    false,
+			IsActualMiss: true,
+		}
 	}
 
 	req, err := http.NewRequest("POST", lt.config.BaseURL+"/logs", bytes.NewBuffer(jsonData))
 	if err != nil {
-		return 0, fmt.Errorf("failed to create request: %w", err)
+		return RequestResult{
+			Duration:     0,
+			Error:        fmt.Errorf("failed to create request: %w", err),
+			IsTimeout:    false,
+			IsActualMiss: true,
+		}
 	}
 
 	req.Header.Set("Content-Type", "application/json")
 
 	resp, err := lt.client.Do(req)
+	duration := time.Since(start)
+
 	if err != nil {
-		return 0, fmt.Errorf("failed to send request: %w", err)
+		isTimeout := strings.Contains(err.Error(), "timeout") ||
+			strings.Contains(err.Error(), "deadline exceeded") ||
+			strings.Contains(err.Error(), "context deadline exceeded")
+
+		return RequestResult{
+			Duration:     duration,
+			Error:        fmt.Errorf("failed to send request: %w", err),
+			IsTimeout:    isTimeout,
+			IsActualMiss: !isTimeout,
+		}
 	}
 	defer resp.Body.Close()
 
-	duration := time.Since(start)
-
 	if resp.StatusCode != http.StatusOK {
-		return duration, fmt.Errorf("unexpected status code: %d", resp.StatusCode)
+		return RequestResult{
+			Duration:     duration,
+			Error:        fmt.Errorf("unexpected status code: %d", resp.StatusCode),
+			IsTimeout:    false,
+			IsActualMiss: true,
+		}
 	}
 
-	return duration, nil
+	return RequestResult{
+		Duration:     duration,
+		Error:        nil,
+		IsTimeout:    false,
+		IsActualMiss: false,
+	}
 }
 
-// worker runs load testing in a worker goroutine
 func (lt *LoadTester) worker(requestsPerWorker int, wg *sync.WaitGroup) {
 	defer wg.Done()
 
 	for i := 0; i < requestsPerWorker; i++ {
 		batchSize := 1
 		if lt.config.BatchSize > 1 {
-			batchSize = rand.Intn(lt.config.BatchSize) + 1 //random batch size 1 to max
+			batchSize = rand.Intn(lt.config.BatchSize) + 1
 		}
 
 		logs := lt.generateBatchLogs(batchSize)
 
-		duration, err := lt.sendRequest(logs)
+		result := lt.sendRequest(logs)
 		atomic.AddInt64(&lt.metrics.TotalRequests, 1)
 		atomic.AddInt64(&lt.metrics.TotalLogs, int64(len(logs)))
 
 		lt.mu.Lock()
-		if err != nil {
-			atomic.AddInt64(&lt.metrics.FailedReqs, 1)
+		if result.Error != nil {
+			if result.IsTimeout {
+				atomic.AddInt64(&lt.metrics.TimeoutReqs, 1)
+			} else if result.IsActualMiss {
+				atomic.AddInt64(&lt.metrics.ActualMissReqs, 1)
+			}
 		} else {
 			atomic.AddInt64(&lt.metrics.SuccessfulReqs, 1)
-			// Only track successful response times for percentiles
-			lt.responseTimes = append(lt.responseTimes, duration)
+			lt.responseTimes = append(lt.responseTimes, result.Duration)
 		}
-
-		//track min/max response times
-		if lt.metrics.MinResponseTime == 0 || duration < lt.metrics.MinResponseTime {
-			lt.metrics.MinResponseTime = duration
+		if lt.metrics.MinResponseTime == 0 || result.Duration < lt.metrics.MinResponseTime {
+			lt.metrics.MinResponseTime = result.Duration
 		}
-		if duration > lt.metrics.MaxResponseTime {
-			lt.metrics.MaxResponseTime = duration
+		if result.Duration > lt.metrics.MaxResponseTime {
+			lt.metrics.MaxResponseTime = result.Duration
 		}
 		lt.mu.Unlock()
 
-		// Send progress update
 		select {
 		case lt.progressChan <- 1:
 		default:
 		}
 
-		time.Sleep(time.Millisecond * time.Duration(rand.Intn(10))) //small random delay
+		time.Sleep(time.Millisecond * time.Duration(rand.Intn(10)))
 	}
 }
 
-// RunLoadTest executes the load test
 func (lt *LoadTester) RunLoadTest() LoadTestMetrics {
-	headerColor.Println("🚀 Starting Load Test...")
-	printTableHeader("📋 Configuration")
+	headerColor.Println("Starting Load Test...")
+	printTableHeader("Configuration")
 	printTableRow("Base URL", lt.config.BaseURL, infoColor)
 	printTableRow("Total Requests", lt.config.TotalRequests, infoColor)
 	printTableRow("Concurrency", lt.config.Concurrency, infoColor)
@@ -276,7 +298,6 @@ func (lt *LoadTester) RunLoadTest() LoadTestMetrics {
 
 	lt.startTime = time.Now()
 
-	// Start progress monitor
 	go lt.monitorProgress()
 
 	requestsPerWorker := lt.config.TotalRequests / lt.config.Concurrency
@@ -291,17 +312,17 @@ func (lt *LoadTester) RunLoadTest() LoadTestMetrics {
 
 	lt.metrics.TotalDuration = time.Since(lt.startTime)
 
-	// Calculate all metrics
 	lt.calculateAverageResponseTime()
 	lt.calculatePercentiles()
 	lt.metrics.RequestsPerSec = float64(lt.metrics.TotalRequests) / lt.metrics.TotalDuration.Seconds()
 	lt.metrics.LogsPerSec = float64(lt.metrics.TotalLogs) / lt.metrics.TotalDuration.Seconds()
-	lt.metrics.ErrorRate = float64(lt.metrics.FailedReqs) / float64(lt.metrics.TotalRequests) * 100
+	lt.metrics.TimeoutRate = float64(lt.metrics.TimeoutReqs) / float64(lt.metrics.TotalRequests) * 100
+	lt.metrics.ActualMissRate = float64(lt.metrics.ActualMissReqs) / float64(lt.metrics.TotalRequests) * 100
+	lt.metrics.SLAMissRate = float64(lt.metrics.TimeoutReqs+lt.metrics.ActualMissReqs) / float64(lt.metrics.TotalRequests) * 100
 
 	return lt.metrics
 }
 
-// monitorProgress provides real-time progress updates
 func (lt *LoadTester) monitorProgress() {
 	ticker := time.NewTicker(2 * time.Second)
 	defer ticker.Stop()
@@ -323,29 +344,29 @@ func (lt *LoadTester) monitorProgress() {
 			}
 
 		case <-lt.progressChan:
-			// Just consume progress updates
 			continue
 		}
 	}
 }
 
-// PrintMetrics prints the load test results
 func (lt *LoadTester) PrintMetrics() {
-	fmt.Println() // Clear progress line
+	fmt.Println()
 
-	printTableHeader("📊 THROUGHPUT METRICS")
+	printTableHeader("THROUGHPUT METRICS")
 	printTableRow("Total Requests", lt.metrics.TotalRequests, metricColor)
 	printTableRow("Total Logs", lt.metrics.TotalLogs, metricColor)
 	printTableRow("Requests/Second", fmt.Sprintf("%.2f", lt.metrics.RequestsPerSec), metricColor)
 	printTableRow("Logs/Second", fmt.Sprintf("%.2f", lt.metrics.LogsPerSec), metricColor)
 	printTableRow("Total Duration", lt.metrics.TotalDuration, metricColor)
 
-	printTableHeader("📈 SUCCESS/ERROR METRICS")
+	printTableHeader("SUCCESS/MISS METRICS")
 	successRate := float64(lt.metrics.SuccessfulReqs) / float64(lt.metrics.TotalRequests) * 100
 	printTableRow("Successful", fmt.Sprintf("%d (%.1f%%)", lt.metrics.SuccessfulReqs, successRate), successColor)
-	printTableRow("Failed", fmt.Sprintf("%d (%.1f%%)", lt.metrics.FailedReqs, lt.metrics.ErrorRate), errorColor)
+	printTableRow("Timeout (SLA Miss)", fmt.Sprintf("%d (%.1f%%)", lt.metrics.TimeoutReqs, lt.metrics.TimeoutRate), warningColor)
+	printTableRow("Actual Misses", fmt.Sprintf("%d (%.1f%%)", lt.metrics.ActualMissReqs, lt.metrics.ActualMissRate), errorColor)
+	printTableRow("Total SLA Misses", fmt.Sprintf("%d (%.1f%%)", lt.metrics.TimeoutReqs+lt.metrics.ActualMissReqs, lt.metrics.SLAMissRate), errorColor)
 
-	printTableHeader("⏱️  RESPONSE TIME METRICS")
+	printTableHeader("RESPONSE TIME METRICS")
 	printTableRow("Average", lt.metrics.AvgResponseTime, infoColor)
 	printTableRow("Minimum", lt.metrics.MinResponseTime, infoColor)
 	printTableRow("Maximum", lt.metrics.MaxResponseTime, infoColor)
@@ -354,29 +375,40 @@ func (lt *LoadTester) PrintMetrics() {
 	printTableRow("P95", lt.metrics.P95ResponseTime, infoColor)
 	printTableRow("P99", lt.metrics.P99ResponseTime, infoColor)
 
-	printTableHeader("🎯 PERFORMANCE ANALYSIS")
-	if lt.metrics.ErrorRate > 5.0 {
-		warningColor.Printf("   ⚠️  High error rate detected (%.1f%%) - system may be overwhelmed\n", lt.metrics.ErrorRate)
+	printTableHeader("PERFORMANCE ANALYSIS")
+	if lt.metrics.SLAMissRate > 5.0 {
+		warningColor.Printf("   WARNING: High SLA miss rate detected (%.1f%%) - system may be overwhelmed\n", lt.metrics.SLAMissRate)
 	} else {
-		successColor.Printf("   ✅ Error rate is acceptable (%.1f%%)\n", lt.metrics.ErrorRate)
+		successColor.Printf("   OK: SLA miss rate is acceptable (%.1f%%)\n", lt.metrics.SLAMissRate)
+	}
+
+	if lt.metrics.TimeoutRate > 2.0 {
+		warningColor.Printf("   WARNING: High timeout rate (%.1f%%) - consider increasing timeout or optimizing performance\n", lt.metrics.TimeoutRate)
+	} else {
+		successColor.Printf("   OK: Timeout rate is acceptable (%.1f%%)\n", lt.metrics.TimeoutRate)
+	}
+
+	if lt.metrics.ActualMissRate > 1.0 {
+		errorColor.Printf("   ERROR: High actual miss rate (%.1f%%) - system has real issues\n", lt.metrics.ActualMissRate)
+	} else {
+		successColor.Printf("   OK: Actual miss rate is low (%.1f%%)\n", lt.metrics.ActualMissRate)
 	}
 
 	if lt.metrics.LogsPerSec < 100 {
-		warningColor.Printf("   ⚠️  Low log throughput (%.1f logs/sec) - system may be bottlenecked\n", lt.metrics.LogsPerSec)
+		warningColor.Printf("   WARNING: Low log throughput (%.1f logs/sec) - system may be bottlenecked\n", lt.metrics.LogsPerSec)
 	} else {
-		successColor.Printf("   ✅ Log throughput is good (%.1f logs/sec)\n", lt.metrics.LogsPerSec)
+		successColor.Printf("   OK: Log throughput is good (%.1f logs/sec)\n", lt.metrics.LogsPerSec)
 	}
 
 	if lt.metrics.P95ResponseTime > 1*time.Second {
-		warningColor.Printf("   ⚠️  High P95 response time (%v) - consider optimization\n", lt.metrics.P95ResponseTime)
+		warningColor.Printf("   WARNING: High P95 response time (%v) - consider optimization\n", lt.metrics.P95ResponseTime)
 	} else {
-		successColor.Printf("   ✅ P95 response time is acceptable (%v)\n", lt.metrics.P95ResponseTime)
+		successColor.Printf("   OK: P95 response time is acceptable (%v)\n", lt.metrics.P95ResponseTime)
 	}
 
 	printSeparator()
 }
 
-// RunLoadTestSuite runs multiple load tests with increasing intensity
 func RunLoadTestSuite() {
 	scenarios := []LoadTestConfig{
 		{
@@ -438,7 +470,7 @@ func RunLoadTestSuite() {
 		"BURST TRAFFIC (300 users)",
 	}
 
-	headerColor.Println("🚀 Logito Load Testing Suite")
+	headerColor.Println("Logito Load Testing Suite")
 	infoColor.Println("Testing log ingestion performance with realistic data")
 	separatorColor.Println(strings.Repeat("═", 80))
 	fmt.Println()
@@ -446,7 +478,7 @@ func RunLoadTestSuite() {
 	var allResults []LoadTestMetrics
 
 	for i, config := range scenarios {
-		headerColor.Printf("📋 Scenario %d/%d: %s\n", i+1, len(scenarios), scenarioNames[i])
+		headerColor.Printf("Scenario %d/%d: %s\n", i+1, len(scenarios), scenarioNames[i])
 		separatorColor.Println(strings.Repeat("═", 80))
 
 		loadTester := NewLoadTester(config)
@@ -454,36 +486,37 @@ func RunLoadTestSuite() {
 		loadTester.PrintMetrics()
 		allResults = append(allResults, metrics)
 
-		if metrics.ErrorRate > 10.0 {
-			warningColor.Printf("⚠️  Warning: High error rate detected (%.2f%%) - system may be overwhelmed\n", metrics.ErrorRate)
+		if metrics.SLAMissRate > 10.0 {
+			warningColor.Printf("WARNING: High SLA miss rate detected (%.2f%%) - system may be overwhelmed\n", metrics.SLAMissRate)
+		}
+		if metrics.TimeoutRate > 5.0 {
+			warningColor.Printf("WARNING: High timeout rate (%.2f%%) - consider increasing timeout or optimizing performance\n", metrics.TimeoutRate)
+		}
+		if metrics.ActualMissRate > 2.0 {
+			errorColor.Printf("CRITICAL: High actual miss rate (%.2f%%) - system has real issues\n", metrics.ActualMissRate)
 		}
 		if metrics.LogsPerSec < 50 {
-			warningColor.Printf("⚠️  Warning: Low log throughput (%.2f logs/sec) - system may be bottlenecked\n", metrics.LogsPerSec)
+			warningColor.Printf("WARNING: Low log throughput (%.2f logs/sec) - system may be bottlenecked\n", metrics.LogsPerSec)
 		}
 		if metrics.P95ResponseTime > 2*time.Second {
-			warningColor.Printf("⚠️  Warning: High P95 response time (%v) - consider optimization\n", metrics.P95ResponseTime)
+			warningColor.Printf("WARNING: High P95 response time (%v) - consider optimization\n", metrics.P95ResponseTime)
 		}
 
 	}
 
-	printTableHeader("📊 Load Test Summary")
+	printTableHeader("Load Test Summary")
 
-	// Table header
-	tableColor.Printf("┌%-30s┬%-15s┬%-15s┬%-12s┬%-15s┬%-12s┐\n",
+	tableColor.Printf("┌%-30s┬%-15s┬%-15s┬%-12s┬%-12s┬%-15s┬%-12s┐\n",
 		strings.Repeat("─", 30), strings.Repeat("─", 15), strings.Repeat("─", 15),
-		strings.Repeat("─", 12), strings.Repeat("─", 15), strings.Repeat("─", 12))
-	tableColor.Printf("│%-30s│%-15s│%-15s│%-12s│%-15s│%-12s│\n",
-		"Scenario", "RPS", "Logs/sec", "Error%", "P95", "Duration")
-	tableColor.Printf("├%-30s┼%-15s┼%-15s┼%-12s┼%-15s┼%-12s┤\n",
+		strings.Repeat("─", 12), strings.Repeat("─", 12), strings.Repeat("─", 15), strings.Repeat("─", 12))
+	tableColor.Printf("│%-30s│%-15s│%-15s│%-12s│%-12s│%-15s│%-12s│\n",
+		"Scenario", "RPS", "Logs/sec", "SLA Miss%", "Timeout%", "P95", "Duration")
+	tableColor.Printf("├%-30s┼%-15s┼%-15s┼%-12s┼%-12s┼%-15s┼%-12s┤\n",
 		strings.Repeat("─", 30), strings.Repeat("─", 15), strings.Repeat("─", 15),
-		strings.Repeat("─", 12), strings.Repeat("─", 15), strings.Repeat("─", 12))
+		strings.Repeat("─", 12), strings.Repeat("─", 12), strings.Repeat("─", 15), strings.Repeat("─", 12))
 
-	// Table rows
 	for i, result := range allResults {
-		// Color code based on performance
-		var rpsColor, logsColor, errorRateColor, p95Color *color.Color
-
-		// RPS color coding
+		var rpsColor, logsColor, slaMissColor, timeoutColor, p95Color *color.Color
 		if result.RequestsPerSec > 1000 {
 			rpsColor = successColor
 		} else if result.RequestsPerSec > 500 {
@@ -492,7 +525,6 @@ func RunLoadTestSuite() {
 			rpsColor = warningColor
 		}
 
-		// Logs/sec color coding
 		if result.LogsPerSec > 5000 {
 			logsColor = successColor
 		} else if result.LogsPerSec > 1000 {
@@ -501,16 +533,22 @@ func RunLoadTestSuite() {
 			logsColor = warningColor
 		}
 
-		// Error rate color coding
-		if result.ErrorRate < 1.0 {
-			errorRateColor = successColor
-		} else if result.ErrorRate < 5.0 {
-			errorRateColor = warningColor
+		if result.SLAMissRate < 1.0 {
+			slaMissColor = successColor
+		} else if result.SLAMissRate < 5.0 {
+			slaMissColor = warningColor
 		} else {
-			errorRateColor = errorColor
+			slaMissColor = errorColor
 		}
 
-		// P95 color coding
+		if result.TimeoutRate < 1.0 {
+			timeoutColor = successColor
+		} else if result.TimeoutRate < 3.0 {
+			timeoutColor = warningColor
+		} else {
+			timeoutColor = errorColor
+		}
+
 		if result.P95ResponseTime < 100*time.Millisecond {
 			p95Color = successColor
 		} else if result.P95ResponseTime < 1*time.Second {
@@ -518,14 +556,14 @@ func RunLoadTestSuite() {
 		} else {
 			p95Color = warningColor
 		}
-
-		// Print row with colors
 		fmt.Printf("│%-30s│", scenarioNames[i])
 		rpsColor.Printf("%-15.1f", result.RequestsPerSec)
 		fmt.Printf("│")
 		logsColor.Printf("%-15.1f", result.LogsPerSec)
 		fmt.Printf("│")
-		errorRateColor.Printf("%-12.1f", result.ErrorRate)
+		slaMissColor.Printf("%-12.1f", result.SLAMissRate)
+		fmt.Printf("│")
+		timeoutColor.Printf("%-12.1f", result.TimeoutRate)
 		fmt.Printf("│")
 		p95Color.Printf("%-15v", result.P95ResponseTime)
 		fmt.Printf("│")
@@ -533,39 +571,36 @@ func RunLoadTestSuite() {
 		fmt.Printf("│\n")
 	}
 
-	// Table footer
-	tableColor.Printf("└%-30s┴%-15s┴%-15s┴%-12s┴%-15s┴%-12s┘\n",
+	tableColor.Printf("└%-30s┴%-15s┴%-15s┴%-12s┴%-12s┴%-15s┴%-12s┘\n",
 		strings.Repeat("─", 30), strings.Repeat("─", 15), strings.Repeat("─", 15),
-		strings.Repeat("─", 12), strings.Repeat("─", 15), strings.Repeat("─", 12))
+		strings.Repeat("─", 12), strings.Repeat("─", 12), strings.Repeat("─", 15), strings.Repeat("─", 12))
 
 	summary := map[string]interface{}{
 		"timestamp": time.Now().Format(time.RFC3339),
 		"scenarios": allResults,
 	}
 
-	resultsJSON, err := json.MarshalIndent(summary, "", "  ") //format json output
+	resultsJSON, err := json.MarshalIndent(summary, "", "  ")
 	if err != nil {
 		fmt.Printf("error marshaling results to json: %v\n", err)
 		return
 	}
 
-	// Create benchmark directory if it doesn't exist
 	benchmarkDir := "benchmark"
 	if err := os.MkdirAll(benchmarkDir, 0755); err != nil {
 		fmt.Printf("error creating benchmark directory: %v\n", err)
 		return
 	}
 
-	// Save results to JSON file
 	filename := filepath.Join(benchmarkDir, "progressive_results.json")
 	if err := os.WriteFile(filename, resultsJSON, 0644); err != nil {
 		fmt.Printf("error writing results to file: %v\n", err)
 		return
 	}
 
-	successColor.Printf("\n💾 Saving comprehensive results to %s\n", filename)
-	successColor.Println("✅ Results saved successfully!")
-	headerColor.Println("\n🎉 Load testing completed successfully!")
+	successColor.Printf("\nSaving comprehensive results to %s\n", filename)
+	successColor.Println("Results saved successfully!")
+	headerColor.Println("\nLoad testing completed successfully!")
 }
 
 func main() {

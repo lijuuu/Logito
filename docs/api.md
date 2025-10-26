@@ -10,8 +10,8 @@ Search logs with various filters and options.
 
 | Parameter | Type | Description | Example |
 |-----------|------|-------------|---------|
-| `message` | string | Search in log messages. Use `+` for adjacent terms | `mercy+log` |
-| `regex` | string | Regex pattern to match in messages | `.*failed.*` |
+| `message` | string | Search in log messages | `database connection` |
+| `regex` | string | Regex pattern to match across all log fields | `.*error.*` |
 | `level` | string | Filter by log level | `error`, `warn`, `info`, `debug` |
 | `resourceId` | string | Filter by resource ID | `server-001` |
 | `traceId` | string | Filter by trace ID | `trace-123` |
@@ -30,14 +30,21 @@ Search logs with various filters and options.
 GET /search?message=database
 ```
 
-**Adjacent proximity search:**
+**Phrase search:**
 ```
-GET /search?message=mercy%2Blog
+GET /search?message=database%20connection
 ```
 
-**Regex search:**
+**Regex search across all fields:**
 ```
-GET /search?regex=.*failed.*
+GET /search?regex=.*error.*
+```
+
+**Semi-complex regex example - Find logs with specific patterns:**
+```
+GET /search?regex=^parent-.*$
+```
+This regex finds logs with parent resource IDs starting with "parent-".
 ```
 
 **Combined filters:**

@@ -1,6 +1,6 @@
 # Logito Makefile
 
-.PHONY: up down restart logs health load reset clean test test-integration setup
+.PHONY: up down restart logs health load reset clean test test-integration setup build truncate
 
 # Start all services
 up:
@@ -27,6 +27,12 @@ health:
 	@echo "Elasticsearch:"
 	@curl -s http://localhost:9200/_cluster/health | jq . || echo "Service not responding"
 
+# Build all services
+build:
+	@echo "Building all services via Docker Compose..."
+	docker-compose build
+	@echo "Build complete!"
+
 # Run load tests
 load:
 	cd loaddata && go run main.go
@@ -38,7 +44,11 @@ reset:
 # Clean up containers and volumes
 clean:
 	docker-compose down -v --remove-orphans
-	docker system prune -f
+	@docker-compose rm -f
+
+# Truncate all logs from PostgreSQL, Elasticsearch, and MongoDB DLQ
+truncate:
+	./scripts/truncate.sh
 
 # Run integration tests only
 test: test-integration
@@ -76,9 +86,11 @@ help:
 	@echo "  restart         - Restart all services"
 	@echo "  logs            - View all service logs"
 	@echo "  health          - Check service health"
+	@echo "  build           - Build all services"
 	@echo "  load            - Run load tests"
 	@echo "  reset           - Reset database and run migrations"
 	@echo "  clean           - Clean up containers and volumes"
+	@echo "  truncate        - Truncate all logs from PostgreSQL, Elasticsearch, and MongoDB DLQ"
 	@echo "  test-integration- Run integration tests"
 	@echo "  setup           - Setup development environment"
 	@echo "  help            - Show this help"

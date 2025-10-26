@@ -51,7 +51,9 @@ if ! docker-compose ps | grep -q "logito-elasticsearch-1.*Up"; then
     exit 1
 fi
 
-print_warning "This will PERMANENTLY DELETE ALL DATA from both PostgreSQL and Elasticsearch!"
+# MongoDB is optional for DLQ, so we don't require it to be running
+
+print_warning "This will PERMANENTLY DELETE ALL DATA from PostgreSQL and Elasticsearch!"
 print_warning "This action cannot be undone!"
 echo ""
 echo -n "Are you absolutely sure you want to continue? Type 'FORCE' to proceed: "
@@ -122,6 +124,28 @@ if [ $attempt -eq $max_attempts ]; then
     exit 1
 fi
 
+# 7.5. MongoDB is optional - only initialize if container exists
+if docker-compose ps | grep -q "logito-mongodb-1.*Up"; then
+    print_step "MongoDB container found, initializing DLQ..."
+    max_attempts=30
+    attempt=0
+    while [ $attempt -lt $max_attempts ]; do
+        if docker-compose exec -T mongodb mongosh --eval "db.adminCommand('ping')" > /dev/null 2>&1; then
+            print_status "MongoDB is ready"
+            break
+        fi
+        attempt=$((attempt + 1))
+        echo -n "."
+        sleep 2
+    done
+    
+    if [ $attempt -eq $max_attempts ]; then
+        print_warning "MongoDB failed to start, but continuing without DLQ..."
+    fi
+else
+    print_status "MongoDB container not found, skipping DLQ initialization"
+fi
+
 # 8. Run database migrations
 print_step "Running database migrations..."
 if [ -f "log-ingestor/internal/migration/migration.sql" ]; then
@@ -187,6 +211,26 @@ else
         }' > /dev/null 2>&1
 fi
 
+# 9.5. Initialize MongoDB DLQ (only if MongoDB is available)
+if docker-compose ps | grep -q "logito-mongodb-1.*Up"; then
+    print_step "Initializing MongoDB DLQ..."
+    docker-compose exec -T mongodb mongosh --eval "
+use logs;
+db.createCollection('dlqlogs');
+db.dlqlogs.createIndex({ 'created_at': 1 });
+db.dlqlogs.createIndex({ 'reason': 1 });
+print('✅ DLQ collection created with indexes');
+" > /dev/null 2>&1
+
+    if [ $? -eq 0 ]; then
+        print_status "MongoDB DLQ initialized successfully"
+    else
+        print_warning "MongoDB DLQ initialization failed, but continuing..."
+    fi
+else
+    print_status "MongoDB not available, skipping DLQ initialization"
+fi
+
 # 10. Verify the setup
 print_step "Verifying the setup..."
 
@@ -206,10 +250,26 @@ else
     print_warning "Elasticsearch index 'logs' not found"
 fi
 
+# Check MongoDB DLQ (only if MongoDB is available)
+if docker-compose ps | grep -q "logito-mongodb-1.*Up"; then
+    MONGO_DLQ_COUNT=$(docker-compose exec -T mongodb mongosh logs --eval "db.dlqlogs.countDocuments()" --quiet 2>/dev/null | tr -d ' \n' || echo "0")
+    print_status "MongoDB DLQ count: $MONGO_DLQ_COUNT"
+
+    # Check if DLQ collection exists
+    MONGO_DLQ_EXISTS=$(docker-compose exec -T mongodb mongosh logs --eval "db.getCollectionNames().includes('dlqlogs')" --quiet 2>/dev/null | tr -d ' \n' || echo "false")
+    if [ "$MONGO_DLQ_EXISTS" = "true" ]; then
+        print_status "MongoDB DLQ collection exists"
+    else
+        print_warning "MongoDB DLQ collection not found"
+    fi
+else
+    print_status "MongoDB not available, DLQ disabled"
+fi
+
 # 11. Final status
 echo ""
 print_status "🎉 Force refresh completed successfully!"
-print_status "Both PostgreSQL and Elasticsearch have been completely wiped and recreated"
+print_status "PostgreSQL and Elasticsearch have been completely wiped and recreated"
 print_status "The system is now clean and ready for new logs"
 echo ""
 print_status "You can now:"

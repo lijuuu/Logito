@@ -5,19 +5,18 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/lijuuu/Logito/log-ingestor/internal/logger"
 	"github.com/lijuuu/Logito/log-ingestor/pkg/logentry"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-// Client represents the postgres client with connection pool
 type Client struct {
 	pool   *pgxpool.Pool
 	config Config
 }
 
-// NewClient creates a new postgres client with connection pool
 func NewClient(config Config) (*Client, error) {
 	dsn := fmt.Sprintf("postgres://%s:%s@%s:%d/%s?sslmode=disable",
 		config.User, config.Password, config.Host, config.Port, config.DBName)
@@ -27,23 +26,28 @@ func NewClient(config Config) (*Client, error) {
 		return nil, fmt.Errorf("failed to parse dsn: %w", err)
 	}
 
-	// configure connection pool
+	// Apply connection pool configuration from YAML
 	poolConfig.MaxConns = int32(config.MaxOpenConns)
 	poolConfig.MinConns = int32(config.MaxIdleConns)
 	poolConfig.MaxConnLifetime = config.ConnMaxLifetime
+	if config.ConnMaxIdleTime > 0 {
+		poolConfig.MaxConnIdleTime = config.ConnMaxIdleTime
+	}
 
 	pool, err := pgxpool.NewWithConfig(context.Background(), poolConfig)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create connection pool: %w", err)
 	}
 
-	// test connection
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
 	if err := pool.Ping(ctx); err != nil {
 		return nil, fmt.Errorf("failed to ping database: %w", err)
 	}
+
+	logger.Database("PostgreSQL connection pool initialized - MaxConns: %d, MinConns: %d, MaxLifetime: %v",
+		config.MaxOpenConns, config.MaxIdleConns, config.ConnMaxLifetime)
 
 	return &Client{
 		pool:   pool,
@@ -51,30 +55,27 @@ func NewClient(config Config) (*Client, error) {
 	}, nil
 }
 
-// Close closes the connection pool
 func (c *Client) Close() {
 	c.pool.Close()
 }
 
-// GetPool returns the underlying connection pool
 func (c *Client) GetPool() *pgxpool.Pool {
 	return c.pool
 }
 
-// InsertBatch inserts a batch of log entries using postgres copy command for maximum performance
 func (c *Client) InsertBatch(ctx context.Context, entries []*logentry.LogEntry) error {
 	if len(entries) == 0 {
 		return nil
 	}
 
-	// use copy command for maximum performance
 	conn, err := c.pool.Acquire(ctx)
 	if err != nil {
+		logger.Error("Failed to acquire database connection: %v", err)
 		return fmt.Errorf("failed to acquire connection: %w", err)
 	}
 	defer conn.Release()
 
-	// start copy transaction
+	// Use PostgreSQL COPY for bulk insert - much faster than individual INSERTs
 	rowsAffected, err := conn.CopyFrom(ctx, pgx.Identifier{"logs"}, []string{
 		"level", "message", "resource_id", "timestamp", "trace_id", "span_id",
 		"commit", "metadata", "indexed", "processing_at",
@@ -95,17 +96,19 @@ func (c *Client) InsertBatch(ctx context.Context, entries []*logentry.LogEntry) 
 	}))
 
 	if err != nil {
+		logger.Error("Failed to insert batch of %d entries: %v", len(entries), err)
 		return fmt.Errorf("failed to copy batch: %w", err)
 	}
 
 	if rowsAffected != int64(len(entries)) {
+		logger.Error("Batch insert mismatch - Expected: %d, Got: %d", len(entries), rowsAffected)
 		return fmt.Errorf("expected %d rows affected, got %d", len(entries), rowsAffected)
 	}
 
+	logger.Database("Successfully inserted batch of %d entries", len(entries))
 	return nil
 }
 
-// HealthCheck checks if the database connection is healthy
 func (c *Client) HealthCheck(ctx context.Context) error {
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()

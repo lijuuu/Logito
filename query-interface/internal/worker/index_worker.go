@@ -6,10 +6,10 @@ import (
 	"time"
 
 	"github.com/lijuuu/Logito/query-interface/internal/indexer"
+	"github.com/lijuuu/Logito/query-interface/internal/logger"
 	"github.com/lijuuu/Logito/query-interface/pkg/logentry"
 )
 
-// IndexWorker handles syncing logs from postgres to elasticsearch
 type IndexWorker struct {
 	esClient   *indexer.ESClient
 	fetcher    *indexer.Fetcher
@@ -17,10 +17,9 @@ type IndexWorker struct {
 	config     Config
 	stopChan   chan struct{}
 	wg         sync.WaitGroup
-	fetchMutex sync.Mutex // prevents concurrent fetching and marking of the same rows
+	fetchMutex sync.Mutex
 }
 
-// Config represents worker configuration
 type Config struct {
 	WorkerCount       int
 	FetchInterval     time.Duration
@@ -30,7 +29,6 @@ type Config struct {
 	RetryDelay        time.Duration
 }
 
-// NewIndexWorker creates a new index worker
 func NewIndexWorker(
 	esClient *indexer.ESClient,
 	fetcher *indexer.Fetcher,
@@ -46,22 +44,18 @@ func NewIndexWorker(
 	}
 }
 
-// Start starts multiple index workers for concurrent processing
 func (w *IndexWorker) Start() {
-	// start multiple workers for concurrent es indexing
 	for i := 0; i < w.config.WorkerCount; i++ {
 		w.wg.Add(1)
 		go w.workerLoop(i)
 	}
 }
 
-// Stop stops the index worker gracefully
 func (w *IndexWorker) Stop() {
 	close(w.stopChan)
 	w.wg.Wait()
 }
 
-// workerLoop is the main worker loop for concurrent processing
 func (w *IndexWorker) workerLoop(workerID int) {
 	defer w.wg.Done()
 
@@ -78,15 +72,24 @@ func (w *IndexWorker) workerLoop(workerID int) {
 	}
 }
 
-// processBatch processes a batch of unindexed logs with worker id
 func (w *IndexWorker) processBatch(workerID int) {
 	ctx, cancel := context.WithTimeout(context.Background(), w.config.ProcessingTimeout)
 	defer cancel()
 
-	// use mutex to prevent concurrent fetching and marking of the same rows
+	// Check ES health before processing
+	healthy, err := w.esClient.IsHealthyForIndexing(ctx)
+	if err != nil {
+		logger.Info("Worker-%d: Failed to check ES health: %v", workerID, err)
+		return
+	}
+
+	if !healthy {
+		logger.Info("Worker-%d: ES health check failed - skipping batch processing", workerID)
+		return
+	}
+
 	w.fetchMutex.Lock()
 
-	// fetch unindexed logs
 	entries, err := w.fetcher.FetchUnindexedLogs(ctx, w.config.BatchSize)
 	if err != nil {
 		w.fetchMutex.Unlock()
@@ -95,48 +98,60 @@ func (w *IndexWorker) processBatch(workerID int) {
 
 	if len(entries) == 0 {
 		w.fetchMutex.Unlock()
-		return // no logs to process
+		return
 	}
 
-	// extract ids for tracking
 	ids := w.extractIDs(entries)
 
-	// mark as processing to prevent duplicate processing
 	if err := w.marker.MarkAsProcessing(ctx, ids); err != nil {
 		w.fetchMutex.Unlock()
 		return
 	}
 
-	// release the mutex after fetching and marking as processing
 	w.fetchMutex.Unlock()
 
-	// attempt to index with retries
+	logger.Info("Worker-%d processing batch - Size: %d", workerID, len(entries))
+
 	for attempt := 0; attempt <= w.config.MaxRetries; attempt++ {
+		if attempt > 0 {
+			logger.Info("Worker-%d retry attempt %d/%d - Size: %d", workerID, attempt, w.config.MaxRetries, len(entries))
+		}
+
 		err := w.esClient.BulkIndex(ctx, entries)
 		if err == nil {
-			// success, mark as indexed
-			if err := w.marker.MarkAsIndexed(ctx, ids); err != nil {
+			// Successfully indexed in ES, now mark as indexed in PostgreSQL
+			if markErr := w.marker.MarkAsIndexed(ctx, ids); markErr != nil {
+				logger.Error("Worker-%d CRITICAL: ES indexed but failed to mark as indexed in PostgreSQL: %v", workerID, markErr)
+				// If we can't mark as indexed, we should mark as failed to prevent inconsistency
+				if failErr := w.marker.MarkAsFailed(ctx, ids, "Failed to mark as indexed: "+markErr.Error()); failErr != nil {
+					logger.Error("Worker-%d CRITICAL: Failed to mark entries as failed: %v", workerID, failErr)
+				}
+				return
 			}
+			logger.Info("Worker-%d batch indexed successfully - Size: %d", workerID, len(entries))
 			return
 		}
 
-		// if this is the last attempt, mark as failed
+		// Log the specific error for debugging
+		logger.Error("Worker-%d attempt %d failed: %v", workerID, attempt+1, err)
+
 		if attempt == w.config.MaxRetries {
-			if err := w.marker.MarkAsFailed(ctx, ids, err.Error()); err != nil {
+			// Final attempt failed, mark as failed in PostgreSQL
+			if failErr := w.marker.MarkAsFailed(ctx, ids, err.Error()); failErr != nil {
+				logger.Error("Worker-%d CRITICAL: Failed to mark entries as failed: %v", workerID, failErr)
 			}
+			logger.Error("Worker-%d batch failed after %d attempts - Size: %d, Final Error: %v", workerID, w.config.MaxRetries+1, len(entries), err)
 			return
 		}
 
-		// wait before retry with exponential backoff
-		retryDelay := w.config.RetryDelay * time.Duration(attempt+1)
+		// Exponential backoff for retries
+		retryDelay := w.config.RetryDelay * time.Duration(1<<attempt) // 2s, 4s, 8s
+		logger.Info("Worker-%d waiting %v before retry", workerID, retryDelay)
 		time.Sleep(retryDelay)
 	}
 }
 
-// extractIDs extracts database ids from log entries
 func (w *IndexWorker) extractIDs(entries []*logentry.LogEntry) []int64 {
-	// this is a simplified version
-	// in a real implementation, you'd need to track the database ids
 	ids := make([]int64, len(entries))
 	for i, entry := range entries {
 		ids[i] = entry.ID
@@ -144,33 +159,26 @@ func (w *IndexWorker) extractIDs(entries []*logentry.LogEntry) []int64 {
 	return ids
 }
 
-// HealthCheck checks if the worker is healthy
 func (w *IndexWorker) HealthCheck(ctx context.Context) error {
-	// check elasticsearch connection
 	if err := w.esClient.HealthCheck(ctx); err != nil {
 		return err
 	}
 
-	// check postgres connection
-	// this would be implemented in the fetcher
 	return nil
 }
 
-// GetStats returns worker statistics
 func (w *IndexWorker) GetStats(ctx context.Context) (map[string]interface{}, error) {
 	stats := map[string]interface{}{
 		"workerStatus": "running",
 		"lastSync":     time.Now(),
 	}
 
-	// add es stats
 	if err := w.esClient.HealthCheck(ctx); err != nil {
 		stats["esStatus"] = "error"
 	} else {
 		stats["esStatus"] = "healthy"
 	}
 
-	// add fetcher stats
 	fetcherStats, err := w.fetcher.GetStats(ctx)
 	if err == nil {
 		for k, v := range fetcherStats {

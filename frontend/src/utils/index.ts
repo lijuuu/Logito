@@ -18,6 +18,22 @@ export function formatTimestamp(timestamp: string): string {
   }
 }
 
+export function validateRegex(pattern: string): { isValid: boolean; error?: string } {
+  if (!pattern.trim()) {
+    return { isValid: true };
+  }
+
+  try {
+    new RegExp(pattern);
+    return { isValid: true };
+  } catch (error) {
+    return {
+      isValid: false,
+      error: error instanceof Error ? error.message : 'Invalid regex pattern'
+    };
+  }
+}
+
 export function formatRelativeTime(timestamp: string): string {
   try {
     const date = parseISO(timestamp);

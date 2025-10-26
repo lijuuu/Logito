@@ -46,10 +46,10 @@ export interface MetadataResponse {
 export interface CountsResponse {
   counts: {
     total: number;
-    byLevel: Array<{ key: string; docCount: number }>;
-    byResource: Array<{ key: string; docCount: number }>;
-    hourly: Array<{ keyAsString: string; key: number; docCount: number }>;
-    daily: Array<{ keyAsString: string; key: number; docCount: number }>;
+    byLevel: Array<{ key: string; doc_count: number }>;
+    byResource: Array<{ key: string; doc_count: number }>;
+    hourly: Array<{ key_as_string: string; key: number; doc_count: number }>;
+    daily: Array<{ key_as_string: string; key: number; doc_count: number }>;
   };
   took: number;
 }
