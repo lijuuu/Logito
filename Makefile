@@ -59,24 +59,6 @@ test-integration:
 	cd tests && go test -v
 
 
-# Setup development environment
-setup:
-	@echo "Setting up development environment..."
-	@echo "Installing dependencies..."
-	go mod download
-	cd tests && go mod download
-	@echo "Starting services..."
-	$(MAKE) up
-	@echo "Waiting for services to be ready..."
-	sleep 10
-	@echo "Running migrations..."
-	$(MAKE) reset
-	@echo "Setup complete! Services are running at:"
-	@echo "  Frontend: http://localhost:3030"
-	@echo "  Query API: http://localhost:4000"
-	@echo "  Log Ingestor: http://localhost:3000"
-	@echo "  Elasticsearch: http://localhost:9200"
-
 
 # Help
 help:
@@ -92,5 +74,4 @@ help:
 	@echo "  clean           - Clean up containers and volumes"
 	@echo "  truncate        - Truncate all logs from PostgreSQL, Elasticsearch, and MongoDB DLQ"
 	@echo "  test-integration- Run integration tests"
-	@echo "  setup           - Setup development environment"
 	@echo "  help            - Show this help"

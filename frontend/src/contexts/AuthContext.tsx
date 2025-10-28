@@ -3,7 +3,7 @@ import { apiService } from '../services/api';
 
 interface User {
   email: string;
-  role: 'admin';
+  role: 'admin' | 'operator' | 'viewer';
 }
 
 interface AuthContextType {
@@ -53,19 +53,7 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
 
   const login = async (email: string, password: string) => {
     try {
-      const response = await fetch('http://localhost:4000/auth/login', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({ email, password }),
-      });
-
-      if (!response.ok) {
-        throw new Error('Login failed');
-      }
-
-      const data = await response.json();
+      const data = await apiService.login(email, password);
 
       setToken(data.token);
       setUser({ email: data.email, role: data.role });

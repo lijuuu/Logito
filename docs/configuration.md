@@ -1,18 +1,8 @@
 # Configuration Guide
 
-## Default Specifications
+## Overview
 
-The system is configured with the following default specifications:
-
-| Service | CPU | Memory | Purpose |
-|---------|-----|--------|---------|
-| PostgreSQL | 2.0 cores | 2GB | Database operations |
-| Elasticsearch | 2.0 cores | 2GB | Search and indexing |
-| Log Ingestor | 1.0 cores | 512MB | High-throughput ingestion |
-| Query Interface | 1.0 cores | 512MB | API and indexing |
-| Frontend | 0.5 cores | 512MB | Web interface |
-
-**Total System Requirements**: 6.5 cores, 5.5GB RAM
+This guide covers advanced configuration options for tuning Logito's performance and resource usage.
 
 ## Changing Specifications
 

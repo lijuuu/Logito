@@ -409,69 +409,69 @@ func (lt *LoadTester) PrintMetrics() {
 	printSeparator()
 }
 
-func RunLoadTestSuite() {
+func RunBatchSizeTestSuite() {
 	scenarios := []LoadTestConfig{
 		{
-			Name:           "light_traffic",
+			Name:           "batch_5",
 			BaseURL:        "http://localhost:3000",
 			TotalRequests:  500,
 			Concurrency:    5,
-			BatchSize:      1,
-			RequestTimeout: 5 * time.Second,
-		},
-		{
-			Name:           "moderate_traffic",
-			BaseURL:        "http://localhost:3000",
-			TotalRequests:  2000,
-			Concurrency:    10,
 			BatchSize:      5,
 			RequestTimeout: 10 * time.Second,
 		},
 		{
-			Name:           "high_traffic",
+			Name:           "batch_10",
 			BaseURL:        "http://localhost:3000",
-			TotalRequests:  4000,
-			Concurrency:    20,
+			TotalRequests:  500,
+			Concurrency:    5,
 			BatchSize:      10,
 			RequestTimeout: 10 * time.Second,
 		},
 		{
-			Name:           "peak_traffic",
+			Name:           "batch_25",
 			BaseURL:        "http://localhost:3000",
-			TotalRequests:  7000,
-			Concurrency:    50,
-			BatchSize:      15,
+			TotalRequests:  500,
+			Concurrency:    5,
+			BatchSize:      25,
+			RequestTimeout: 10 * time.Second,
+		},
+		{
+			Name:           "batch_50",
+			BaseURL:        "http://localhost:3000",
+			TotalRequests:  500,
+			Concurrency:    5,
+			BatchSize:      50,
+			RequestTimeout: 10 * time.Second,
+		},
+		{
+			Name:           "batch_100",
+			BaseURL:        "http://localhost:3000",
+			TotalRequests:  500,
+			Concurrency:    5,
+			BatchSize:      100,
+			RequestTimeout: 10 * time.Second,
+		},
+		{
+			Name:           "batch_200",
+			BaseURL:        "http://localhost:3000",
+			TotalRequests:  500,
+			Concurrency:    5,
+			BatchSize:      200,
 			RequestTimeout: 15 * time.Second,
-		},
-		{
-			Name:           "stress_traffic",
-			BaseURL:        "http://localhost:3000",
-			TotalRequests:  10000,
-			Concurrency:    100,
-			BatchSize:      20,
-			RequestTimeout: 20 * time.Second,
-		},
-		{
-			Name:           "burst_traffic",
-			BaseURL:        "http://localhost:3000",
-			TotalRequests:  3000,
-			Concurrency:    300,
-			BatchSize:      5,
-			RequestTimeout: 5 * time.Second,
 		},
 	}
 
 	scenarioNames := []string{
-		"LIGHT TRAFFIC (5 users)",
-		"MODERATE TRAFFIC (10 users)",
-		"HIGH TRAFFIC (20 users)",
-		"PEAK TRAFFIC (50 users)",
-		"STRESS TRAFFIC (100 users)",
-		"BURST TRAFFIC (300 users)",
+		"BATCH SIZE 5",
+		"BATCH SIZE 10",
+		"BATCH SIZE 25",
+		"BATCH SIZE 50",
+		"BATCH SIZE 100",
+		"BATCH SIZE 200",
 	}
 
-	headerColor.Println("Logito Load Testing Suite")
-	infoColor.Println("Testing log ingestion performance with realistic data")
+	headerColor.Println("Logito Batch Size Test Suite")
+	infoColor.Println("Testing optimal batch size for maximum throughput")
 	separatorColor.Println(strings.Repeat("═", 80))
 	fmt.Println()
 
@@ -502,9 +502,21 @@ func RunLoadTestSuite() {
 			warningColor.Printf("WARNING: High P95 response time (%v) - consider optimization\n", metrics.P95ResponseTime)
 		}
 
+		// Batch size analysis
+		if i > 0 {
+			prevResult := allResults[i-1]
+			throughputChange := (metrics.LogsPerSec - prevResult.LogsPerSec) / prevResult.LogsPerSec * 100
+
+			if throughputChange > 20 {
+				successColor.Printf("📈 BATCH SIZE WIN: Throughput increased %.1f%% with larger batches\n", throughputChange)
+			} else if throughputChange < -20 {
+				warningColor.Printf("📉 BATCH SIZE LOSS: Throughput decreased %.1f%% with larger batches\n", -throughputChange)
+			}
+		}
+
 	}
 
-	printTableHeader("Load Test Summary")
+	printTableHeader("Batch Size Test Summary")
 
 	tableColor.Printf("┌%-30s┬%-15s┬%-15s┬%-12s┬%-12s┬%-15s┬%-12s┐\n",
 		strings.Repeat("─", 30), strings.Repeat("─", 15), strings.Repeat("─", 15),
@@ -577,6 +589,7 @@ func RunLoadTestSuite() {
 
 	summary := map[string]interface{}{
 		"timestamp": time.Now().Format(time.RFC3339),
+		"test_type": "batch_size",
 		"scenarios": allResults,
 	}
 
@@ -592,17 +605,323 @@ func RunLoadTestSuite() {
 		return
 	}
 
-	filename := filepath.Join(benchmarkDir, "progressive_results.json")
+	filename := filepath.Join(benchmarkDir, "batch_size_results.json")
 	if err := os.WriteFile(filename, resultsJSON, 0644); err != nil {
 		fmt.Printf("error writing results to file: %v\n", err)
 		return
 	}
 
-	successColor.Printf("\nSaving comprehensive results to %s\n", filename)
-	successColor.Println("Results saved successfully!")
-	headerColor.Println("\nLoad testing completed successfully!")
+	successColor.Printf("\nSaving batch size results to %s\n", filename)
+	successColor.Println("Batch size test completed successfully!")
+
+	// Batch size analysis
+	printSeparator()
+	headerColor.Println("BATCH SIZE ANALYSIS")
+	printSeparator()
+
+	bestThroughput := 0.0
+	bestBatchSize := 0
+	optimalBatchSize := 0
+
+	for i, result := range allResults {
+		batchSize := scenarios[i].BatchSize
+		if result.LogsPerSec > bestThroughput {
+			bestThroughput = result.LogsPerSec
+			bestBatchSize = batchSize
+		}
+
+		// Find where performance starts degrading significantly
+		if i > 0 {
+			prevResult := allResults[i-1]
+			throughputDrop := (prevResult.LogsPerSec - result.LogsPerSec) / prevResult.LogsPerSec * 100
+			if throughputDrop > 15 && optimalBatchSize == 0 {
+				optimalBatchSize = scenarios[i-1].BatchSize
+			}
+		}
+	}
+
+	infoColor.Printf("📊 Best throughput: %.1f logs/sec with batch size %d\n", bestThroughput, bestBatchSize)
+	if optimalBatchSize > 0 {
+		warningColor.Printf("⚠️  Performance degradation starts at batch size %d\n", optimalBatchSize)
+		infoColor.Printf("💡 Recommended optimal batch size: %d\n", optimalBatchSize)
+	} else {
+		infoColor.Printf("💡 Larger batches continue to improve performance\n")
+	}
+}
+
+func RunConcurrencyTestSuite() {
+	scenarios := []LoadTestConfig{
+		{
+			Name:           "concurrency_2",
+			BaseURL:        "http://localhost:3000",
+			TotalRequests:  200,
+			Concurrency:    2,
+			BatchSize:      10,
+			RequestTimeout: 5 * time.Second,
+		},
+		{
+			Name:           "concurrency_5",
+			BaseURL:        "http://localhost:3000",
+			TotalRequests:  300,
+			Concurrency:    5,
+			BatchSize:      10,
+			RequestTimeout: 8 * time.Second,
+		},
+		{
+			Name:           "concurrency_10",
+			BaseURL:        "http://localhost:3000",
+			TotalRequests:  400,
+			Concurrency:    10,
+			BatchSize:      10,
+			RequestTimeout: 10 * time.Second,
+		},
+		{
+			Name:           "concurrency_15",
+			BaseURL:        "http://localhost:3000",
+			TotalRequests:  500,
+			Concurrency:    15,
+			BatchSize:      10,
+			RequestTimeout: 12 * time.Second,
+		},
+		{
+			Name:           "concurrency_20",
+			BaseURL:        "http://localhost:3000",
+			TotalRequests:  600,
+			Concurrency:    20,
+			BatchSize:      10,
+			RequestTimeout: 15 * time.Second,
+		},
+		{
+			Name:           "concurrency_30",
+			BaseURL:        "http://localhost:3000",
+			TotalRequests:  700,
+			Concurrency:    30,
+			BatchSize:      10,
+			RequestTimeout: 20 * time.Second,
+		},
+		{
+			Name:           "concurrency_50",
+			BaseURL:        "http://localhost:3000",
+			TotalRequests:  800,
+			Concurrency:    50,
+			BatchSize:      10,
+			RequestTimeout: 25 * time.Second,
+		},
+	}
+
+	scenarioNames := []string{
+		"CONCURRENCY 2",
+		"CONCURRENCY 5",
+		"CONCURRENCY 10",
+		"CONCURRENCY 15",
+		"CONCURRENCY 20",
+		"CONCURRENCY 30",
+		"CONCURRENCY 50",
+	}
+
+	headerColor.Println("Logito Concurrency Test Suite")
+	infoColor.Println("Testing system limits under increasing concurrent load")
+	separatorColor.Println(strings.Repeat("═", 80))
+	fmt.Println()
+
+	var allResults []LoadTestMetrics
+
+	for i, config := range scenarios {
+		headerColor.Printf("Scenario %d/%d: %s\n", i+1, len(scenarios), scenarioNames[i])
+		separatorColor.Println(strings.Repeat("═", 80))
+
+		loadTester := NewLoadTester(config)
+		metrics := loadTester.RunLoadTest()
+		loadTester.PrintMetrics()
+		allResults = append(allResults, metrics)
+
+		if metrics.SLAMissRate > 10.0 {
+			warningColor.Printf("WARNING: High SLA miss rate detected (%.2f%%) - system may be overwhelmed\n", metrics.SLAMissRate)
+		}
+		if metrics.TimeoutRate > 5.0 {
+			warningColor.Printf("WARNING: High timeout rate (%.2f%%) - consider increasing timeout or optimizing performance\n", metrics.TimeoutRate)
+		}
+		if metrics.ActualMissRate > 2.0 {
+			errorColor.Printf("CRITICAL: High actual miss rate (%.2f%%) - system has real issues\n", metrics.ActualMissRate)
+		}
+		if metrics.LogsPerSec < 50 {
+			warningColor.Printf("WARNING: Low log throughput (%.2f logs/sec) - system may be bottlenecked\n", metrics.LogsPerSec)
+		}
+		if metrics.P95ResponseTime > 2*time.Second {
+			warningColor.Printf("WARNING: High P95 response time (%v) - consider optimization\n", metrics.P95ResponseTime)
+		}
+
+		// Concurrency bottleneck analysis
+		if i > 0 {
+			prevResult := allResults[i-1]
+			throughputDrop := (prevResult.LogsPerSec - metrics.LogsPerSec) / prevResult.LogsPerSec * 100
+			responseTimeIncrease := float64(metrics.P95ResponseTime-prevResult.P95ResponseTime) / float64(prevResult.P95ResponseTime) * 100
+
+			if throughputDrop > 20 {
+				errorColor.Printf("🚨 CONCURRENCY BOTTLENECK: Throughput dropped %.1f%% from previous test\n", throughputDrop)
+			}
+			if responseTimeIncrease > 100 {
+				errorColor.Printf("🚨 CONCURRENCY BOTTLENECK: Response time increased %.1f%% from previous test\n", responseTimeIncrease)
+			}
+		}
+
+	}
+
+	printTableHeader("Concurrency Test Summary")
+
+	tableColor.Printf("┌%-30s┬%-15s┬%-15s┬%-12s┬%-12s┬%-15s┬%-12s┐\n",
+		strings.Repeat("─", 30), strings.Repeat("─", 15), strings.Repeat("─", 15),
+		strings.Repeat("─", 12), strings.Repeat("─", 12), strings.Repeat("─", 15), strings.Repeat("─", 12))
+	tableColor.Printf("│%-30s│%-15s│%-15s│%-12s│%-12s│%-15s│%-12s│\n",
+		"Scenario", "RPS", "Logs/sec", "SLA Miss%", "Timeout%", "P95", "Duration")
+	tableColor.Printf("├%-30s┼%-15s┼%-15s┼%-12s┼%-12s┼%-15s┼%-12s┤\n",
+		strings.Repeat("─", 30), strings.Repeat("─", 15), strings.Repeat("─", 15),
+		strings.Repeat("─", 12), strings.Repeat("─", 12), strings.Repeat("─", 15), strings.Repeat("─", 12))
+
+	for i, result := range allResults {
+		var rpsColor, logsColor, slaMissColor, timeoutColor, p95Color *color.Color
+		if result.RequestsPerSec > 1000 {
+			rpsColor = successColor
+		} else if result.RequestsPerSec > 500 {
+			rpsColor = infoColor
+		} else {
+			rpsColor = warningColor
+		}
+
+		if result.LogsPerSec > 5000 {
+			logsColor = successColor
+		} else if result.LogsPerSec > 1000 {
+			logsColor = infoColor
+		} else {
+			logsColor = warningColor
+		}
+
+		if result.SLAMissRate < 1.0 {
+			slaMissColor = successColor
+		} else if result.SLAMissRate < 5.0 {
+			slaMissColor = warningColor
+		} else {
+			slaMissColor = errorColor
+		}
+
+		if result.TimeoutRate < 1.0 {
+			timeoutColor = successColor
+		} else if result.TimeoutRate < 3.0 {
+			timeoutColor = warningColor
+		} else {
+			timeoutColor = errorColor
+		}
+
+		if result.P95ResponseTime < 100*time.Millisecond {
+			p95Color = successColor
+		} else if result.P95ResponseTime < 1*time.Second {
+			p95Color = infoColor
+		} else {
+			p95Color = warningColor
+		}
+		fmt.Printf("│%-30s│", scenarioNames[i])
+		rpsColor.Printf("%-15.1f", result.RequestsPerSec)
+		fmt.Printf("│")
+		logsColor.Printf("%-15.1f", result.LogsPerSec)
+		fmt.Printf("│")
+		slaMissColor.Printf("%-12.1f", result.SLAMissRate)
+		fmt.Printf("│")
+		timeoutColor.Printf("%-12.1f", result.TimeoutRate)
+		fmt.Printf("│")
+		p95Color.Printf("%-15v", result.P95ResponseTime)
+		fmt.Printf("│")
+		infoColor.Printf("%-12v", result.TotalDuration.Round(time.Second))
+		fmt.Printf("│\n")
+	}
+
+	tableColor.Printf("└%-30s┴%-15s┴%-15s┴%-12s┴%-12s┴%-15s┴%-12s┘\n",
+		strings.Repeat("─", 30), strings.Repeat("─", 15), strings.Repeat("─", 15),
+		strings.Repeat("─", 12), strings.Repeat("─", 12), strings.Repeat("─", 15), strings.Repeat("─", 12))
+
+	summary := map[string]interface{}{
+		"timestamp": time.Now().Format(time.RFC3339),
+		"test_type": "concurrency",
+		"scenarios": allResults,
+	}
+
+	resultsJSON, err := json.MarshalIndent(summary, "", "  ")
+	if err != nil {
+		fmt.Printf("error marshaling results to json: %v\n", err)
+		return
+	}
+
+	benchmarkDir := "benchmark"
+	if err := os.MkdirAll(benchmarkDir, 0755); err != nil {
+		fmt.Printf("error creating benchmark directory: %v\n", err)
+		return
+	}
+
+	filename := filepath.Join(benchmarkDir, "concurrency_results.json")
+	if err := os.WriteFile(filename, resultsJSON, 0644); err != nil {
+		fmt.Printf("error writing results to file: %v\n", err)
+		return
+	}
+
+	successColor.Printf("\nSaving concurrency results to %s\n", filename)
+	successColor.Println("Concurrency test completed successfully!")
+
+	// Concurrency bottleneck analysis
+	printSeparator()
+	headerColor.Println("CONCURRENCY BOTTLENECK ANALYSIS")
+	printSeparator()
+
+	bestThroughput := 0.0
+	bestConcurrency := 0
+	optimalConcurrency := 0
+
+	for i, result := range allResults {
+		concurrency := scenarios[i].Concurrency
+		if result.LogsPerSec > bestThroughput {
+			bestThroughput = result.LogsPerSec
+			bestConcurrency = concurrency
+		}
+
+		// Find where performance starts degrading significantly
+		if i > 0 {
+			prevResult := allResults[i-1]
+			throughputDrop := (prevResult.LogsPerSec - result.LogsPerSec) / prevResult.LogsPerSec * 100
+			if throughputDrop > 15 && optimalConcurrency == 0 {
+				optimalConcurrency = scenarios[i-1].Concurrency
+			}
+		}
+	}
+
+	infoColor.Printf("📊 Best throughput: %.1f logs/sec at %d concurrent users\n", bestThroughput, bestConcurrency)
+	if optimalConcurrency > 0 {
+		warningColor.Printf("⚠️  Performance degradation starts at %d concurrent users\n", optimalConcurrency)
+		infoColor.Printf("💡 Recommended max concurrency: %d users\n", optimalConcurrency)
+	} else {
+		infoColor.Printf("💡 System handled all concurrency levels well\n")
+	}
 }
 
 func main() {
-	RunLoadTestSuite()
+	if len(os.Args) > 1 {
+		switch os.Args[1] {
+		case "batch":
+			RunBatchSizeTestSuite()
+		case "concurrency":
+			RunConcurrencyTestSuite()
+		case "both":
+			RunBatchSizeTestSuite()
+			fmt.Println()
+			RunConcurrencyTestSuite()
+		default:
+			fmt.Println("Usage: go run main.go [batch|concurrency|both]")
+			fmt.Println("  batch       - Test optimal batch size")
+			fmt.Println("  concurrency - Test concurrency limits")
+			fmt.Println("  both        - Run both test suites")
+			os.Exit(1)
+		}
+	} else {
+		// Default: run both tests
+		RunBatchSizeTestSuite()
+		fmt.Println()
+		RunConcurrencyTestSuite()
+	}
 }

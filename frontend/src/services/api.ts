@@ -10,7 +10,7 @@ import {
 } from '../types';
 import { logger } from '../utils/logger';
 
-const API_BASE_URL = process.env.NODE_ENV === 'production' ? '/api' : 'http://localhost:4000';
+const API_BASE_URL = process.env.REACT_APP_API_URL || 'http://localhost:4000';
 
 class ApiService {
   private baseUrl: string;
@@ -117,6 +117,38 @@ class ApiService {
     logger.logUserAction('resetIndexingStatus');
     return this.request<{ message: string; timestamp: string }>('/reset-indexing', {
       method: 'POST',
+    });
+  }
+
+  async login(email: string, password: string): Promise<{ token: string; email: string; role: 'admin' | 'operator' | 'viewer' }> {
+    logger.logUserAction('login', { email });
+    return this.request<{ token: string; email: string; role: 'admin' | 'operator' | 'viewer' }>('/auth/login', {
+      method: 'POST',
+      body: JSON.stringify({ email, password }),
+    });
+  }
+
+  async getDLQCount(): Promise<{ count: number }> {
+    logger.logUserAction('getDLQCount');
+    return this.request<{ count: number }>('/dlq/count');
+  }
+
+  async getDLQMessages(limit: number = 10): Promise<{ messages: any[] }> {
+    logger.logUserAction('getDLQMessages', { limit });
+    return this.request<{ messages: any[] }>(`/dlq/messages?limit=${limit}`);
+  }
+
+  async forceAddAllDLQMessages(): Promise<{ message: string }> {
+    logger.logUserAction('forceAddAllDLQMessages');
+    return this.request<{ message: string }>('/dlq/force-add-all', {
+      method: 'POST',
+    });
+  }
+
+  async clearDLQ(): Promise<{ message: string }> {
+    logger.logUserAction('clearDLQ');
+    return this.request<{ message: string }>('/dlq/clear', {
+      method: 'DELETE',
     });
   }
 }

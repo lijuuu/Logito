@@ -8,6 +8,7 @@ import (
 
 	"github.com/lijuuu/Logito/log-ingestor/internal/config"
 	"github.com/lijuuu/Logito/log-ingestor/internal/dlq"
+	"github.com/lijuuu/Logito/log-ingestor/internal/ingest"
 	"github.com/lijuuu/Logito/log-ingestor/internal/logger"
 	"github.com/lijuuu/Logito/log-ingestor/internal/storage/postgres"
 	"github.com/lijuuu/Logito/log-ingestor/pkg/logentry"
@@ -22,9 +23,10 @@ type Worker struct {
 	wg          sync.WaitGroup
 	dlq         dlq.DLQ
 	config      *config.Config
+	pool        *ingest.ObjectPool
 }
 
-func NewWorker(dbClient *postgres.Client, concurrency int, retryCount int, retryDelay time.Duration, dlq dlq.DLQ, cfg *config.Config) *Worker {
+func NewWorker(dbClient *postgres.Client, concurrency int, retryCount int, retryDelay time.Duration, dlq dlq.DLQ, cfg *config.Config, pool *ingest.ObjectPool) *Worker {
 	return &Worker{
 		dbClient:    dbClient,
 		concurrency: concurrency,
@@ -33,6 +35,7 @@ func NewWorker(dbClient *postgres.Client, concurrency int, retryCount int, retry
 		stopChan:    make(chan struct{}),
 		dlq:         dlq,
 		config:      cfg,
+		pool:        pool,
 	}
 }
 
@@ -66,6 +69,8 @@ func (w *Worker) workerLoop(batchChan <-chan *logentry.Batch, workerID int) {
 
 func (w *Worker) processBatch(batch *logentry.Batch, workerID int) {
 	if batch.IsEmpty() {
+		// Return slice to pool before returning
+		w.pool.PutLogEntrySlice(batch.Entries)
 		return
 	}
 
@@ -79,6 +84,8 @@ func (w *Worker) processBatch(batch *logentry.Batch, workerID int) {
 		err := w.dbClient.InsertBatch(ctx, batch.Entries)
 		if err == nil {
 			logger.Worker(workerID, batchSize, "Batch processed successfully")
+			// Return slice to pool after successful processing
+			w.pool.PutLogEntrySlice(batch.Entries)
 			return
 		}
 
@@ -100,6 +107,8 @@ func (w *Worker) processBatch(batch *logentry.Batch, workerID int) {
 			} else {
 				logger.Error("DLQ not available, batch of %d entries lost", len(batch.Entries))
 			}
+			// Return slice to pool after DLQ processing
+			w.pool.PutLogEntrySlice(batch.Entries)
 			return
 		}
 

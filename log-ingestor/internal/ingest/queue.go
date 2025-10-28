@@ -79,17 +79,20 @@ func (b *Batcher) flushBatch() {
 		return
 	}
 
-	batch := b.pool.GetBatch()
+	// Create batch with pre-allocated slice from pool
+	entries := b.pool.GetLogEntrySlice()
+	entries = append(entries, b.entries...)
 
-	for _, entry := range b.entries {
-		batch.Add(entry)
+	batch := &logentry.Batch{
+		Entries: entries,
+		Size:    len(entries),
 	}
 
 	// Non-blocking send with timeout to prevent worker channel from blocking the batcher
 	select {
 	case b.workerChan <- batch:
 		logger.Info("Batch sent to worker channel, size: %d", len(batch.Entries))
-	case <-time.After(100 * time.Millisecond):
+	case <-time.After(500 * time.Millisecond):
 		logger.Error("Worker channel overloaded, sending batch to DLQ, size: %d", len(batch.Entries))
 		b.sendToDLQ(batch)
 	}
@@ -121,13 +124,15 @@ func (b *Batcher) flushLoop() {
 
 func (b *Batcher) sendToDLQ(batch *logentry.Batch) {
 	if batch.IsEmpty() {
-		b.pool.PutBatch(batch)
+		// Return slice to pool before discarding batch
+		b.pool.PutLogEntrySlice(batch.Entries)
 		return
 	}
 
 	if b.dlq == nil {
 		logger.Error("DLQ not available, batch dropped - size: %d", len(batch.Entries))
-		b.pool.PutBatch(batch)
+		// Return slice to pool before discarding batch
+		b.pool.PutLogEntrySlice(batch.Entries)
 		return
 	}
 
@@ -142,7 +147,8 @@ func (b *Batcher) sendToDLQ(batch *logentry.Batch) {
 	}
 
 	logger.Info("Batch sent to DLQ - Total: %d, Success: %d", len(batch.Entries), dlqCount)
-	b.pool.PutBatch(batch)
+	// Return slice to pool after processing
+	b.pool.PutLogEntrySlice(batch.Entries)
 }
 
 // GetWorkerChan returns the worker channel for batch processing

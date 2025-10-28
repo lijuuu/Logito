@@ -1,4 +1,3 @@
-
 services:
   postgres:
     image: postgres:16
@@ -12,6 +11,8 @@ services:
       - postgres_data:/var/lib/postgresql/data
       - ./.configs/postgresql.conf:/etc/postgresql/postgresql.conf
     command: ["postgres", "-c", "config_file=/etc/postgresql/postgresql.conf"]
+    networks:
+      - logito-network
     deploy:
       resources:
         limits:
@@ -24,8 +25,6 @@ services:
       retries: 10
       start_period: 60s
 
-
-
   elasticsearch:
     image: docker.elastic.co/elasticsearch/elasticsearch:8.11.1
     environment:
@@ -36,6 +35,8 @@ services:
       - "9200:9200"
     volumes:
       - elasticsearch_data:/usr/share/elasticsearch/data
+    networks:
+      - logito-network
     deploy:
       resources:
         limits:
@@ -53,9 +54,11 @@ services:
     environment:
       MONGO_INITDB_DATABASE: logs
     ports:
-      - "27018:27017"  # Use different external port to avoid conflict with host MongoDB
+      - "27018:27017"
     volumes:
       - mongodb_data:/data/db
+    networks:
+      - logito-network
     deploy:
       resources:
         limits:
@@ -74,18 +77,20 @@ services:
       dockerfile: log-ingestor/docker/Dockerfile
     ports:
       - "3000:3000"
-      - "6060:6060"  
-    depends_on:
-      postgres:
-        condition: service_healthy
-      mongodb:
-        condition: service_healthy
+      - "6060:6060"
+    # depends_on:
+      # postgres:
+      #   condition: service_healthy
+      # mongodb:
+      #   condition: service_healthy
     restart: unless-stopped
     environment:
       - ENV=local
       - GOMAXPROCS=1
-      - GOGC=200
+      - GOGC=50  # More aggressive GC
       - GOMEMLIMIT=512MiB
+    networks:
+      - logito-network
     healthcheck:
       test: ["CMD-SHELL", "wget --no-verbose --tries=1 --spider http://localhost:3000/health || exit 1"]
       interval: 30s
@@ -96,7 +101,7 @@ services:
       resources:
         limits:
           cpus: "1.0"
-          memory: "512M"
+          memory: "1GB"
 
   query-interface:
     build:
@@ -115,12 +120,13 @@ services:
       - ENV=local
       - GOMAXPROCS=1
       - GOMEMLIMIT=512MiB
+    networks:
+      - logito-network
     deploy:
       resources:
         limits:
           cpus: "1.0"
           memory: "512M"
-    # Add startup delay to ensure log-ingestor migrations are complete
     command: sh -c "sleep 5 && ./query-interface"
 
   frontend:
@@ -131,13 +137,21 @@ services:
       - "3030:3030"
     depends_on:
       - query-interface
+    networks:
+      - logito-network
     deploy:
       resources:
         limits:
           cpus: "0.5"
           memory: "512M"
 
+
 volumes:
   postgres_data:
   elasticsearch_data:
   mongodb_data:
+
+networks:
+  logito-network:
+    driver: bridge
+    name: logito-network

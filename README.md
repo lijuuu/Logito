@@ -1,41 +1,161 @@
 # Logito - Log Management System
 
-A log management system built with Go and React, featuring high-performance log ingestion, Elasticsearch indexing, and a modern web interface.
+A high-performance log ingestion platform with optimized throughput and reliability, built with Go and React.
 
-## Architecture
+## System Design
 
-![Logito Architecture](docs/logito.drawio.png)
+```mermaid
+graph TB
+    subgraph "Clients"
+        CL[Applications]
+        LT[Load Tests]
+    end
 
-- **Log Ingestor**: High-throughput log ingestion service (Go)
-- **Query Interface**: REST API for log queries and Elasticsearch indexing (Go)
-- **Frontend**: Modern React-based web interface
+    subgraph "Log Ingestor (Port 3000)"
+        API[HTTP API]
+        AUTH[Auth + RBAC]
+        PARSER[Log Parser]
+        BATCHER[Batcher]
+        WORKERS[Workers]
+    end
+
+    subgraph "Query Interface (Port 4000)"
+        QAPI[Search API]
+        INDEXER[Index Workers]
+        ES_HEALTH[ES Health Check]
+        REPROCESS[DLQ Reprocessing]
+    end
+
+    subgraph "Storage"
+        PG[(PostgreSQL)]
+        ES[(Elasticsearch)]
+        DLQ[(MongoDB DLQ)]
+    end
+
+    CL --> API
+    LT --> API
+    API --> AUTH
+    AUTH --> PARSER
+    PARSER --> BATCHER
+    BATCHER --> WORKERS
+    WORKERS --> PG
+    WORKERS -->|Timeout| DLQ
+    PG --> INDEXER
+    INDEXER --> ES_HEALTH
+    ES_HEALTH --> ES
+    QAPI --> ES
+    PARSER -->|Invalid| DLQ
+    REPROCESS --> DLQ
+    REPROCESS --> PG
+
+    classDef client fill:#e1f5fe,color:#000000
+    classDef service fill:#f3e5f5,color:#000000
+    classDef storage fill:#fff3e0,color:#000000
+
+    class CL,LT client
+    class API,QAPI,AUTH,PARSER,BATCHER,WORKERS,INDEXER,ES_HEALTH,REPROCESS service
+    class PG,ES,DLQ storage
+```
+
+## How It Works
+
+### 1. **Log Ingestion Flow**
+```
+Client Request → Auth/RBAC → Parser → Batcher → Workers → PostgreSQL
+                     ↓                    ↓
+                Invalid Logs → DLQ    Timeout Batches → DLQ
+```
+
+### 2. **Search Flow**
+```
+Search Request → Auth/RBAC → Elasticsearch → Results
+```
+
+### 3. **Indexing Flow**
+```
+PostgreSQL → Index Workers → ES Health Check → Elasticsearch
+```
+
+### 4. **DLQ Reprocessing Flow**
+```
+Query Interface → DLQ Reprocessing → PostgreSQL
+```
+
+## Key Components
+
+| Component | Purpose | Configuration |
+|-----------|---------|---------------|
+| **Batcher** | Groups logs for efficiency | Configurable batch size and flush interval |
+| **Workers** | Process batches concurrently | Multiple workers with retry logic and timeout handling |
+| **Index Workers** | Sync PostgreSQL → Elasticsearch | Multiple workers with batch processing |
+| **DLQ Reprocessing** | Re-add failed messages to PostgreSQL | Manual reprocessing via Query Interface |
+| **Connection Pools** | Manage database connections | Optimized connection pooling |
+| **DLQ** | Store failed messages | MongoDB with monitoring |
+
+## Performance Results
+
+The system demonstrates excellent performance across various load scenarios with consistent reliability and low latency.
+
+## Technology Stack
+
+### Backend Services
+- **Go + Gin Framework**: High-performance HTTP server
 - **PostgreSQL**: Primary database for log storage
 - **Elasticsearch**: Search and indexing engine
-- **MongoDB**: Optional Dead Letter Queue (DLQ) for failed log processing
+- **MongoDB**: Dead Letter Queue (DLQ) for failed messages
 
-## Performance
+### Frontend
+- **React + TypeScript**: Modern web interface
+- **Tailwind CSS**: Styling and UI components
+- **Vite**: Build tool and development server
 
-Logito delivers solid performance for log management with proven scalability:
+### Infrastructure
+- **Docker Compose**: Container orchestration
+- **Make**: Build automation and convenience commands
 
-### Key Performance Metrics
-- **Peak Throughput**: 11,787 logs/sec under optimal conditions
-- **Sustained Performance**: 7,932 logs/sec with 100 concurrent users
-- **Zero Error Rate**: 100% success rate across all load scenarios
-- **Response Times**: P95 under 50ms for normal to high traffic
-- **Scalability**: Tested with close to 11M logs
+## Performance Optimizations
 
-### Load Test Results
-![Performance Metrics](docs/performance.png)
+### Memory Management
+- **GC Tuning**: Optimized garbage collection settings
+- **Object Pools**: Reuse memory to reduce allocations
+- **Batch Processing**: Group operations for efficiency
 
-Comprehensive load testing demonstrates solid performance across various scenarios with 100% success rate and excellent response times.
+### Concurrency
+- **Multiple Workers**: Process batches in parallel
+- **Index Workers**: Sync data to Elasticsearch
+- **Connection Pooling**: Optimized database connections
+
+### Health Monitoring
+- **ES Health Check**: Prevents overload with configurable thresholds
+- **DLQ Monitoring**: Alerts on failed message accumulation
+- **Real-time Metrics**: Throughput, latency, error rates
+
+## Security Features
+
+- **JWT Authentication**: Secure API access
+- **RBAC**: Role-based permissions (admin/operator/viewer)
+- **Input Validation**: Prevent injection attacks
+- **DLQ Protection**: Secure failed message storage
 
 ## Quick Start
 
+### Prerequisites
+- Docker 20.10+ with Docker Compose 2.0+
+- Make (optional, for convenience commands)
+- 8GB RAM minimum (16GB recommended)
+- 4 CPU cores minimum (8 cores recommended)
+
+### Installation
 ```bash
-# Clone and start
+# Clone and setup
 git clone <repository-url>
 cd Logito
+
+# Start all services
 make up
+
+# Verify installation
+make health
 
 # Access the web interface
 open http://localhost:3030
@@ -44,10 +164,7 @@ open http://localhost:3030
 ## Documentation
 
 - **[API Documentation](docs/api.md)** - Complete API reference with examples
-- **[Installation Guide](docs/installation.md)** - Setup and deployment instructions
 - **[Configuration Guide](docs/configuration.md)** - System configuration and tuning
-- **[Services Overview](docs/services.md)** - Architecture and service details
-- **[DLQ Configuration](docs/dlq-configuration.md)** - Dead Letter Queue setup and usage
 
 ## Default Specifications
 
@@ -77,15 +194,6 @@ The system is configured with these default specifications:
 | `make load` | Run load tests |
 | `make reset` | Reset database and run migrations |
 
-## Service Endpoints
-
-| Service | URL | Description |
-|---------|-----|-------------|
-| Frontend | http://localhost:3030 | Web interface |
-| Query API | http://localhost:4000 | REST API |
-| Log Ingestor | http://localhost:3000 | Log ingestion |
-| PostgreSQL | localhost:5433 | Database |
-| Elasticsearch | http://localhost:9200 | Search engine |
 
 ## Usage
 
