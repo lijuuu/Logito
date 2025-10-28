@@ -114,7 +114,7 @@ func main() {
 	indexWorker.Start()
 
 	// Initialize DLQ client
-	dlqClient, err := dlq.NewDLQClient(cfg)
+	dlqClient, err := dlq.NewDLQClient(cfg, dbClient)
 	if err != nil {
 		logger.Error("Failed to initialize DLQ client: %v", err)
 		log.Fatalf("failed to initialize DLQ client: %v", err)
@@ -231,7 +231,7 @@ func loadConfig() (*config.Config, error) {
 	return &cfg, nil
 }
 
-// waitForLogsTable waits for the logs table to be created by log-ingestor, 
+// waitForLogsTable waits for the logs table to be created by log-ingestor,
 // only start indexing after that
 func waitForLogsTable(dbClient *postgres.Client) {
 	ctx := context.Background()

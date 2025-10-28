@@ -17,6 +17,7 @@ import (
 	"github.com/lijuuu/Logito/log-ingestor/internal/logger"
 	"github.com/lijuuu/Logito/log-ingestor/internal/migration"
 	"github.com/lijuuu/Logito/log-ingestor/internal/storage/postgres"
+	"github.com/lijuuu/Logito/log-ingestor/internal/streaming"
 	"github.com/lijuuu/Logito/log-ingestor/internal/worker"
 
 	"github.com/gin-gonic/gin"
@@ -62,6 +63,9 @@ func main() {
 	pool := ingest.NewObjectPool()
 	logger.Init("Object pool initialized")
 
+	streamServer := streaming.NewStreamServer()
+	logger.Init("WebSocket stream server initialized")
+
 	batcher := ingest.NewBatcher(
 		cfg.LogIngestor.Processing.Batcher.MaxBatchSize,
 		cfg.LogIngestor.Processing.Batcher.MaxBatchCount,
@@ -69,6 +73,7 @@ func main() {
 		pool,
 		dlqClient,
 		cfg,
+		streamServer,
 	)
 	logger.Init("Batcher initialized - MaxBatchSize: %d, MaxBatchCount: %d, FlushInterval: %v",
 		cfg.LogIngestor.Processing.Batcher.MaxBatchSize, cfg.LogIngestor.Processing.Batcher.MaxBatchCount, cfg.LogIngestor.Processing.Batcher.FlushInterval)
@@ -96,6 +101,7 @@ func main() {
 	router.POST("/logs", handler.IngestLogs)
 	router.GET("/health", handler.HealthCheck)
 	router.GET("/quick-stats", handler.GetQuickStats)
+	router.GET("/ws", streamServer.HandleWebSocket)
 
 	srv := &http.Server{
 		Addr:    fmt.Sprintf(":%d", cfg.LogIngestor.Server.Port),
