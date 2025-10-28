@@ -7,6 +7,7 @@ import (
 	"github.com/lijuuu/Logito/log-ingestor/internal/config"
 	"github.com/lijuuu/Logito/log-ingestor/internal/dlq"
 	"github.com/lijuuu/Logito/log-ingestor/internal/logger"
+	"github.com/lijuuu/Logito/log-ingestor/internal/streaming"
 	"github.com/lijuuu/Logito/log-ingestor/pkg/logentry"
 )
 
@@ -22,19 +23,18 @@ type Batcher struct {
 	dlq           dlq.DLQ
 	config        *config.Config
 	stats         *BatcherStats
-	statsMu       sync.RWMutex
+	streamServer  *streaming.StreamServer
 }
 
 type BatcherStats struct {
-	TotalReceived     int64
-	TotalProcessed    int64
-	TotalFailed       int64
-	CurrentBatchSize  int
-	CurrentMemoryLogs int
-	LastFlushTime     time.Time
+	TotalReceived    int64
+	TotalProcessed   int64
+	TotalFailed      int64
+	CurrentBatchSize int
+	LastFlushTime    time.Time
 }
 
-func NewBatcher(maxBatchSize, maxBatchCount int, flushInterval time.Duration, pool *ObjectPool, dlq dlq.DLQ, cfg *config.Config) *Batcher {
+func NewBatcher(maxBatchSize, maxBatchCount int, flushInterval time.Duration, pool *ObjectPool, dlq dlq.DLQ, cfg *config.Config, streamServer *streaming.StreamServer) *Batcher {
 	b := &Batcher{
 		maxBatchSize:  maxBatchSize,
 		flushInterval: flushInterval,
@@ -45,6 +45,7 @@ func NewBatcher(maxBatchSize, maxBatchCount int, flushInterval time.Duration, po
 		dlq:           dlq,
 		config:        cfg,
 		stats:         &BatcherStats{},
+		streamServer:  streamServer,
 	}
 
 	b.flushTicker = time.NewTicker(flushInterval)
@@ -79,7 +80,6 @@ func (b *Batcher) flushBatch() {
 		return
 	}
 
-	// Create batch with pre-allocated slice from pool
 	entries := b.pool.GetLogEntrySlice()
 	entries = append(entries, b.entries...)
 
@@ -88,7 +88,10 @@ func (b *Batcher) flushBatch() {
 		Size:    len(entries),
 	}
 
-	// Non-blocking send with timeout to prevent worker channel from blocking the batcher
+	if b.streamServer != nil {
+		b.streamServer.BroadcastBatch(batch)
+	}
+
 	select {
 	case b.workerChan <- batch:
 		logger.Info("Batch sent to worker channel, size: %d", len(batch.Entries))

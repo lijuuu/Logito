@@ -10,6 +10,7 @@ import { StatsCards } from './components/StatsCards';
 import { LogDetailsModal } from './components/LogDetailsModal';
 import { IndexingStatus } from './components/IndexingStatus';
 import { DLQManagement } from './components/DLQManagement';
+import { LogStreamCanvas } from './components/LogStreamCanvas';
 import { useLogs, useInvalidateLogs } from './hooks/useLogs';
 import { SearchFilters } from './types';
 import { Search, RefreshCw, AlertCircle } from 'lucide-react';
@@ -76,6 +77,9 @@ const LogsPage: React.FC = () => {
     <div className="space-y-4 sm:space-y-6">
       {/* Stats Cards */}
       <StatsCards filters={filters} />
+
+      {/* Live Log Stream */}
+      <LogStreamCanvas width={800} height={300} />
 
       {/* Indexing Status */}
       <IndexingStatus />
