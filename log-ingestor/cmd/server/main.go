@@ -20,7 +20,6 @@ import (
 	"github.com/lijuuu/Logito/log-ingestor/internal/worker"
 
 	"github.com/gin-gonic/gin"
-	//"github.com/joho/godotenv"
 	"gopkg.in/yaml.v3"
 )
 
@@ -60,8 +59,8 @@ func main() {
 		logger.Init("DLQ disabled")
 	}
 
-	pool := ingest.NewObjectPool(cfg.LogIngestor.Processing.Batcher.MaxBatchCount)
-	logger.Init("Object pool initialized with capacity: %d", cfg.LogIngestor.Processing.Batcher.MaxBatchCount)
+	pool := ingest.NewObjectPool()
+	logger.Init("Object pool initialized")
 
 	batcher := ingest.NewBatcher(
 		cfg.LogIngestor.Processing.Batcher.MaxBatchSize,
@@ -81,6 +80,7 @@ func main() {
 		cfg.LogIngestor.Processing.Workers.RetryInterval,
 		dlqClient,
 		cfg,
+		pool,
 	)
 	logger.Init("Worker initialized with concurrency: %d", cfg.LogIngestor.Processing.Workers.Concurrency)
 

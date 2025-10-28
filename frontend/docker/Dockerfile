@@ -1,5 +1,5 @@
-# Multi-stage build for React frontend
-FROM node:20-alpine AS builder
+# Simple React frontend build
+FROM node:20-alpine
 
 WORKDIR /app
 
@@ -15,17 +15,11 @@ COPY . .
 # Build the application
 RUN npm run build
 
-# Production stage with nginx
-FROM nginx:alpine
-
-# Copy built files from builder stage
-COPY --from=builder /app/build /usr/share/nginx/html
-
-# Copy nginx configuration
-COPY docker/nginx.conf /etc/nginx/conf.d/default.conf
+# Install a simple HTTP server
+RUN npm install -g serve
 
 # Expose port 3030
 EXPOSE 3030
 
-# Start nginx
-CMD ["nginx", "-g", "daemon off;"]
+# Serve the built application
+CMD ["serve", "-s", "build", "-l", "3030"]

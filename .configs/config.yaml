@@ -11,7 +11,7 @@ database:
     password: "logpass"
     dbname: "logs"
     connectionPool:
-      maxOpenConns: 100
+      maxOpenConns: 40
       maxIdleConns: 20
       connMaxLifetime: "10m"
       connMaxIdleTime: "2m"
@@ -44,19 +44,19 @@ log-ingestor:
   processing:
     batcher:
       maxBatchSize: 1000
-      maxBatchCount: 2000
-      flushInterval: "100ms"
+      maxBatchCount: 5000
+      flushInterval: "250ms"
     workers:
-      concurrency: 20
-      retryInterval: "300ms"
-      retryCount: 3
+      concurrency: 3
+      retryInterval: "500ms"
+      retryCount: 2
 
   dlq:
     failureTypes:
-      parseError: false
+      parseError: true
       dbFailure: true
-      validationError: false
-      timeoutError: false
+      validationError: true
+      timeoutError: true
 
 # Query Interface Service
 # ----------------------
@@ -80,9 +80,9 @@ query-interface:
         healthCheckTimeout: "5s"
     indexer:
       workers:
-        count: 8
+        count: 3
         batchSize: 3000
-        fetchInterval: "200ms"
+        fetchInterval: "500ms"
       retry:
         maxRetries: 3
         delay: "3s"

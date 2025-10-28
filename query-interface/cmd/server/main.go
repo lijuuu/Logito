@@ -61,9 +61,9 @@ func main() {
 		cfg.QueryInterface.Elasticsearch.Connection.Index,
 		cfg.QueryInterface.Elasticsearch.Connection.Timeout,
 		indexer.ElasticsearchPoolConfig{
-			MaxIdleConns:        cfg.QueryInterface.Elasticsearch.Connection.ConnectionPool.MaxIdleConns,
-			MaxConnsPerHost:     cfg.QueryInterface.Elasticsearch.Connection.ConnectionPool.MaxConnsPerHost,
-			IdleConnTimeout:     cfg.QueryInterface.Elasticsearch.Connection.ConnectionPool.IdleConnTimeout,
+			MaxIdleConns:    cfg.QueryInterface.Elasticsearch.Connection.ConnectionPool.MaxIdleConns,
+			MaxConnsPerHost: cfg.QueryInterface.Elasticsearch.Connection.ConnectionPool.MaxConnsPerHost,
+			IdleConnTimeout: cfg.QueryInterface.Elasticsearch.Connection.ConnectionPool.IdleConnTimeout,
 		},
 		indexer.ElasticsearchHealthConfig{
 			CheckMinHealth:     cfg.QueryInterface.Elasticsearch.Connection.HealthCheck.CheckMinHealth,
@@ -152,8 +152,7 @@ func main() {
 
 	// Public routes (no auth required)
 	router.POST("/auth/login", handler.Login)
-	router.GET("/health", handler.HealthCheck)
-	router.GET("/es-health", handler.ESHealthCheck)
+	router.GET("/health", handler.ESHealthCheck)
 
 	// All routes require admin authentication
 	allRoutes := router.Group("/")
@@ -165,11 +164,15 @@ func main() {
 	allRoutes.GET("/metadata", handler.GetMetadata)
 	allRoutes.GET("/counts", handler.GetCounts)
 	allRoutes.GET("/logs/:id", handler.GetLogEntry)
-	allRoutes.GET("/sync-status", handler.GetSyncStatus)
 	allRoutes.GET("/profile", handler.GetProfile)
+
+	//indexing
+	allRoutes.GET("/sync-status", handler.GetSyncStatus)
+	allRoutes.POST("/reset-indexing", handler.ResetIndexingStatus)
+
+	//dlq
 	allRoutes.GET("/dlq/count", handler.GetDLQCount)
 	allRoutes.GET("/dlq/messages", handler.GetDLQMessages)
-	allRoutes.POST("/reset-indexing", handler.ResetIndexingStatus)
 	allRoutes.POST("/dlq/force-add-all", handler.ForceAddAllDLQMessages)
 	allRoutes.DELETE("/dlq/clear", handler.ClearDLQ)
 
@@ -228,7 +231,8 @@ func loadConfig() (*config.Config, error) {
 	return &cfg, nil
 }
 
-// waitForLogsTable waits for the logs table to be created by log-ingestor
+// waitForLogsTable waits for the logs table to be created by log-ingestor, 
+// only start indexing after that
 func waitForLogsTable(dbClient *postgres.Client) {
 	ctx := context.Background()
 	maxRetries := 60

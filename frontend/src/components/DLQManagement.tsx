@@ -3,6 +3,7 @@ import { useAuth } from '../contexts/AuthContext';
 import { Button } from './ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from './ui/card';
 import { Badge } from './ui/badge';
+import { apiService } from '../services/api';
 
 interface DLQMessage {
   id: string;
@@ -28,28 +29,10 @@ export const DLQManagement: React.FC = () => {
     setIsLoading(true);
     try {
       // Fetch both count and messages
-      const [countResponse, messagesResponse] = await Promise.all([
-        fetch('http://localhost:4000/dlq/count', {
-          headers: {
-            'Authorization': `Bearer ${token}`,
-          },
-        }),
-        fetch('http://localhost:4000/dlq/messages?limit=10', {
-          headers: {
-            'Authorization': `Bearer ${token}`,
-          },
-        })
+      const [countData, messagesData] = await Promise.all([
+        apiService.getDLQCount(),
+        apiService.getDLQMessages(10)
       ]);
-
-      if (!countResponse.ok) {
-        throw new Error('Failed to fetch DLQ count');
-      }
-      if (!messagesResponse.ok) {
-        throw new Error('Failed to fetch DLQ messages');
-      }
-
-      const countData: DLQStats = await countResponse.json();
-      const messagesData = await messagesResponse.json();
 
       setDlqCount(countData.count);
       setMessages(messagesData.messages || []);
@@ -69,17 +52,7 @@ export const DLQManagement: React.FC = () => {
     }
 
     try {
-      const response = await fetch('http://localhost:4000/dlq/force-add-all', {
-        method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${token}`,
-        },
-      });
-
-      if (!response.ok) {
-        throw new Error('Failed to force add all messages');
-      }
-
+      await apiService.forceAddAllDLQMessages();
       // Refresh the data
       refreshDLQ();
     } catch (err) {
@@ -95,17 +68,7 @@ export const DLQManagement: React.FC = () => {
     }
 
     try {
-      const response = await fetch('http://localhost:4000/dlq/clear', {
-        method: 'DELETE',
-        headers: {
-          'Authorization': `Bearer ${token}`,
-        },
-      });
-
-      if (!response.ok) {
-        throw new Error('Failed to clear DLQ');
-      }
-
+      await apiService.clearDLQ();
       // Refresh the data
       refreshDLQ();
     } catch (err) {
