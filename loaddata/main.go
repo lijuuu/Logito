@@ -103,9 +103,17 @@ type LoadTester struct {
 }
 
 func NewLoadTester(config LoadTestConfig) *LoadTester {
+	// stdlib's default transport caps idle connections at 2 per host, which
+	// throttles the client itself once concurrency goes past that - not a
+	// server-side limit, but it was skewing these results.
+	transport := &http.Transport{
+		MaxIdleConns:        config.Concurrency * 2,
+		MaxIdleConnsPerHost: config.Concurrency * 2,
+		IdleConnTimeout:     90 * time.Second,
+	}
 	return &LoadTester{
 		config:        config,
-		client:        &http.Client{Timeout: config.RequestTimeout},
+		client:        &http.Client{Timeout: config.RequestTimeout, Transport: transport},
 		responseTimes: make([]time.Duration, 0, config.TotalRequests),
 		progressChan:  make(chan int, config.TotalRequests),
 	}
@@ -208,6 +216,9 @@ func (lt *LoadTester) sendRequest(logs []MockLogEntry) RequestResult {
 	}
 
 	req.Header.Set("Content-Type", "application/json")
+	if tok := os.Getenv("LOAD_TEST_TOKEN"); tok != "" {
+		req.Header.Set("Authorization", "Bearer "+tok)
+	}
 
 	resp, err := lt.client.Do(req)
 	duration := time.Since(start)
@@ -412,8 +423,16 @@ func (lt *LoadTester) PrintMetrics() {
 func RunBatchSizeTestSuite() {
 	scenarios := []LoadTestConfig{
 		{
+			Name:           "batch_1",
+			BaseURL:        "http://localhost:3001",
+			TotalRequests:  500,
+			Concurrency:    5,
+			BatchSize:      1,
+			RequestTimeout: 10 * time.Second,
+		},
+		{
 			Name:           "batch_5",
-			BaseURL:        "http://localhost:3000",
+			BaseURL:        "http://localhost:3001",
 			TotalRequests:  500,
 			Concurrency:    5,
 			BatchSize:      5,
@@ -421,7 +440,7 @@ func RunBatchSizeTestSuite() {
 		},
 		{
 			Name:           "batch_10",
-			BaseURL:        "http://localhost:3000",
+			BaseURL:        "http://localhost:3001",
 			TotalRequests:  500,
 			Concurrency:    5,
 			BatchSize:      10,
@@ -429,7 +448,7 @@ func RunBatchSizeTestSuite() {
 		},
 		{
 			Name:           "batch_25",
-			BaseURL:        "http://localhost:3000",
+			BaseURL:        "http://localhost:3001",
 			TotalRequests:  500,
 			Concurrency:    5,
 			BatchSize:      25,
@@ -437,7 +456,7 @@ func RunBatchSizeTestSuite() {
 		},
 		{
 			Name:           "batch_50",
-			BaseURL:        "http://localhost:3000",
+			BaseURL:        "http://localhost:3001",
 			TotalRequests:  500,
 			Concurrency:    5,
 			BatchSize:      50,
@@ -445,7 +464,7 @@ func RunBatchSizeTestSuite() {
 		},
 		{
 			Name:           "batch_100",
-			BaseURL:        "http://localhost:3000",
+			BaseURL:        "http://localhost:3001",
 			TotalRequests:  500,
 			Concurrency:    5,
 			BatchSize:      100,
@@ -453,7 +472,7 @@ func RunBatchSizeTestSuite() {
 		},
 		{
 			Name:           "batch_200",
-			BaseURL:        "http://localhost:3000",
+			BaseURL:        "http://localhost:3001",
 			TotalRequests:  500,
 			Concurrency:    5,
 			BatchSize:      200,
@@ -462,6 +481,7 @@ func RunBatchSizeTestSuite() {
 	}
 
 	scenarioNames := []string{
+		"BATCH SIZE 1",
 		"BATCH SIZE 5",
 		"BATCH SIZE 10",
 		"BATCH SIZE 25",
@@ -653,7 +673,7 @@ func RunConcurrencyTestSuite() {
 	scenarios := []LoadTestConfig{
 		{
 			Name:           "concurrency_2",
-			BaseURL:        "http://localhost:3000",
+			BaseURL:        "http://localhost:3001",
 			TotalRequests:  200,
 			Concurrency:    2,
 			BatchSize:      10,
@@ -661,7 +681,7 @@ func RunConcurrencyTestSuite() {
 		},
 		{
 			Name:           "concurrency_5",
-			BaseURL:        "http://localhost:3000",
+			BaseURL:        "http://localhost:3001",
 			TotalRequests:  300,
 			Concurrency:    5,
 			BatchSize:      10,
@@ -669,7 +689,7 @@ func RunConcurrencyTestSuite() {
 		},
 		{
 			Name:           "concurrency_10",
-			BaseURL:        "http://localhost:3000",
+			BaseURL:        "http://localhost:3001",
 			TotalRequests:  400,
 			Concurrency:    10,
 			BatchSize:      10,
@@ -677,7 +697,7 @@ func RunConcurrencyTestSuite() {
 		},
 		{
 			Name:           "concurrency_15",
-			BaseURL:        "http://localhost:3000",
+			BaseURL:        "http://localhost:3001",
 			TotalRequests:  500,
 			Concurrency:    15,
 			BatchSize:      10,
@@ -685,7 +705,7 @@ func RunConcurrencyTestSuite() {
 		},
 		{
 			Name:           "concurrency_20",
-			BaseURL:        "http://localhost:3000",
+			BaseURL:        "http://localhost:3001",
 			TotalRequests:  600,
 			Concurrency:    20,
 			BatchSize:      10,
@@ -693,7 +713,7 @@ func RunConcurrencyTestSuite() {
 		},
 		{
 			Name:           "concurrency_30",
-			BaseURL:        "http://localhost:3000",
+			BaseURL:        "http://localhost:3001",
 			TotalRequests:  700,
 			Concurrency:    30,
 			BatchSize:      10,
@@ -701,7 +721,7 @@ func RunConcurrencyTestSuite() {
 		},
 		{
 			Name:           "concurrency_50",
-			BaseURL:        "http://localhost:3000",
+			BaseURL:        "http://localhost:3001",
 			TotalRequests:  800,
 			Concurrency:    50,
 			BatchSize:      10,

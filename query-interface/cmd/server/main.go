@@ -132,8 +132,6 @@ func main() {
 	handler := api.NewHandler(esClient, indexWorker, fetcher, dlqClient, authService, cfg)
 
 	router := gin.Default()
-	router.Use(gin.Recovery())
-	router.Use(gin.Logger())
 
 	router.Use(func(c *gin.Context) {
 		c.Header("Access-Control-Allow-Origin", "*")

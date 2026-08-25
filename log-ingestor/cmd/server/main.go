@@ -99,9 +99,6 @@ func main() {
 
 	router := gin.Default()
 
-	router.Use(gin.Recovery())
-	router.Use(gin.Logger())
-
 	// /logs requires a valid token issued by query-interface's /auth/login;
 	// health/stats/ws stay open for infra checks and the live stream view.
 	router.POST("/logs", auth.AuthMiddleware(authService), handler.IngestLogs)

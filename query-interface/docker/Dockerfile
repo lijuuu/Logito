@@ -34,5 +34,12 @@ COPY --from=builder /app/.configs/config.yaml ./config.yaml
 # expose port
 EXPOSE 4000
 
+# match log-ingestor's runtime tuning; GOMAXPROCS/GOMEMLIMIT should track
+# the container's own cpu/memory limits (1 cpu / 512M in docker-compose.yml)
+ENV GIN_MODE=release
+ENV GOMAXPROCS=1
+ENV GOGC=50
+ENV GOMEMLIMIT=400MiB
+
 # run the application
 CMD ["./query-interface"]

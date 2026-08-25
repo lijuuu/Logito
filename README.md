@@ -94,7 +94,18 @@ Query Interface → DLQ Reprocessing → PostgreSQL
 
 ## Performance Results
 
-The system demonstrates excellent performance across various load scenarios with consistent reliability and low latency.
+Measured with `loaddata`'s batch-size suite (500 requests, concurrency 5) against `log-ingestor` alone, resource-capped to match this repo's own `docker-compose.yml` limits (postgres 2 cpu/2G, mongodb 1 cpu/1G, log-ingestor 1 cpu/1G — roughly a medium cloud instance's worth of total capacity). 3 clean runs from an empty table each time.
+
+| Batch size | Logs/sec (range across 3 runs) | P95 (range) |
+|---|---|---|
+| 5 | 2,504 – 2,581 | 1.0 – 1.7ms |
+| 10 | 4,405 – 5,202 | 1.0 – 1.3ms |
+| 25 | 10,874 – 11,534 | 1.7 – 2.4ms |
+| 50 | 19,157 – 20,947 | 2.9 – 3.6ms |
+| 100 | 34,482 – 35,445 | 4.3 – 5.3ms |
+| 200 | 49,997 – 54,931 | 7.2 – 8.3ms |
+
+0% SLA misses and 0% timeouts across every run.
 
 ## Technology Stack
 
