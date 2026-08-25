@@ -1,6 +1,13 @@
 # Logito Configuration
 # ===================
 
+# Shared Auth
+# -----------
+# jwtSecret signs and validates tokens issued by query-interface's /auth/login.
+# log-ingestor only validates tokens against this same secret; it does not issue any.
+auth:
+  jwtSecret: "0c9ffb736624d8d20284120d02a72c65fb019aec813ed0170d93155579da7221"
+
 # Database Configuration
 # ---------------------
 database:

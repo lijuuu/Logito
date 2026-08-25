@@ -11,6 +11,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/lijuuu/Logito/log-ingestor/internal/auth"
 	"github.com/lijuuu/Logito/log-ingestor/internal/config"
 	"github.com/lijuuu/Logito/log-ingestor/internal/dlq"
 	"github.com/lijuuu/Logito/log-ingestor/internal/ingest"
@@ -93,12 +94,17 @@ func main() {
 
 	handler := ingest.NewHandler(batcher, pool, dlqClient, cfg)
 
+	authService := auth.NewAuthService(cfg)
+	logger.Init("Auth service initialized")
+
 	router := gin.Default()
 
 	router.Use(gin.Recovery())
 	router.Use(gin.Logger())
 
-	router.POST("/logs", handler.IngestLogs)
+	// /logs requires a valid token issued by query-interface's /auth/login;
+	// health/stats/ws stay open for infra checks and the live stream view.
+	router.POST("/logs", auth.AuthMiddleware(authService), handler.IngestLogs)
 	router.GET("/health", handler.HealthCheck)
 	router.GET("/quick-stats", handler.GetQuickStats)
 	router.GET("/ws", streamServer.HandleWebSocket)

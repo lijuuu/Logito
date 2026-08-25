@@ -27,7 +27,7 @@ type AuthService struct {
 
 func NewAuthService(cfg *config.Config) *AuthService {
 	return &AuthService{
-		jwtSecret: []byte(cfg.QueryInterface.Auth.Password), // Using password as JWT secret
+		jwtSecret: []byte(cfg.Auth.JWTSecret),
 	}
 }
 

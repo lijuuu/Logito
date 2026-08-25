@@ -5,9 +5,16 @@ import (
 )
 
 type Config struct {
+	Auth           SharedAuthConfig     `yaml:"auth"`
 	Database       DatabaseConfig       `yaml:"database"`
 	DLQ            DLQConfig            `yaml:"dlq"`
 	QueryInterface QueryInterfaceConfig `yaml:"query-interface"`
+}
+
+// SharedAuthConfig holds the jwt secret both services validate tokens against.
+// only query-interface issues tokens (see /auth/login); log-ingestor only validates them.
+type SharedAuthConfig struct {
+	JWTSecret string `yaml:"jwtSecret"`
 }
 
 type DatabaseConfig struct {
